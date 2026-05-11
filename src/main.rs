@@ -65,6 +65,23 @@ pub struct CreateDirectoryResponse {
     pub error: Option<String>,
 }
 
+// create_zfs_share 请求结构体
+#[derive(Deserialize, Debug)]
+pub struct CreateZfsShareRequest {
+    pub share_name: String,
+    pub dataset_name: String,
+    pub quota: String,
+    pub samba_user: String,
+}
+
+// create_zfs_share 响应结构体
+#[derive(Serialize, Debug)]
+pub struct CreateZfsShareResponse {
+    pub success: bool,
+    pub message: String,
+    pub error: Option<String>,
+}
+
 // 通用请求包装
 #[derive(Deserialize, Debug)]
 #[serde(tag = "action")]
@@ -77,6 +94,8 @@ pub enum Request {
     ImportPool(ImportPoolRequest),
     #[serde(rename = "create_directory")]
     CreateDirectory(CreateDirectoryRequest),
+    #[serde(rename = "create_zfs_share")]
+    CreateZfsShare(CreateZfsShareRequest),
 }
 
 // 通用响应包装
@@ -161,6 +180,7 @@ fn handle_connection(mut stream: UnixStream) {
             Request::ExportPool(req) => handle_export_pool(req),
             Request::ImportPool(req) => handle_import_pool(req),
             Request::CreateDirectory(req) => handle_create_directory(req),
+            Request::CreateZfsShare(req) => handle_create_zfs_share(req),
         };
 
         if !send_response(&mut stream, &resp) {
@@ -406,72 +426,6 @@ fn handle_create_pool(req: CreatePoolRequest) -> Response {
     let pool_name = &req.pool_name;
     let pool_type = req.pool_type.to_lowercase();
     let devices = &req.devices;
-
-    // 2. 验证池名称合法性
-    if !pool_name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
-    {
-        return Response {
-            success: false,
-            data: None,
-            error: Some(
-                "Pool name must contain only alphanumeric characters, underscores, or hyphens"
-                    .to_string(),
-            ),
-        };
-    }
-
-    // 3. 验证 pool_type 和设备数量
-    let min_devices = match pool_type.as_str() {
-        "single" => 1,
-        "strip" => 2,
-        "mirror" => 2,
-        "raidz1" => 3,
-        "raidz2" => 4,
-        "raidz3" => 5,
-        "raid10" => 4,
-        _ => {
-            return Response {
-                success: false,
-                data: None,
-                error: Some(
-                    "Pool type must be one of: single, strip, mirror, raidz1, raidz2, raidz3, raid10"
-                        .to_string(),
-                ),
-            };
-        }
-    };
-
-    if devices.len() < min_devices {
-        return Response {
-            success: false,
-            data: None,
-            error: Some(format!(
-                "Pool type '{}' requires at least {} devices, but only {} provided",
-                pool_type,
-                min_devices,
-                devices.len()
-            )),
-        };
-    }
-
-    // 4. 验证设备名称合法性
-    for device in devices {
-        if !device
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
-        {
-            return Response {
-                success: false,
-                data: None,
-                error: Some(format!(
-                    "Invalid device name: {}. Device name must be alphanumeric",
-                    device
-                )),
-            };
-        }
-    }
 
     // 5. 查找设备的 by-id 路径
     let mut device_by_ids: Vec<String> = Vec::new();
@@ -729,4 +683,213 @@ fn find_partition_by_id(disk_name: &str, part_suffix: &str) -> Result<String, St
         "Cannot find partition ID for '{}{}'",
         disk_name, part_suffix
     ))
+}
+
+fn handle_create_zfs_share(req: CreateZfsShareRequest) -> Response {
+    let share_name = &req.share_name;
+    let dataset_name = &req.dataset_name;
+    let quota = &req.quota;
+    let samba_user = &req.samba_user;
+    let mountpoint = format!("/{}/{}", dataset_name, share_name);
+
+    let dataset = format!("{}/{}", dataset_name, share_name);
+
+    // Step 0: 检查 dataset 是否已存在
+    let check_output = Command::new("zfs")
+        .args(["list", "-H", "-o", "name", &dataset])
+        .output();
+
+    let dataset_exists = match check_output {
+        Ok(result) => result.status.success(),
+        Err(_) => false,
+    };
+
+    // Step 1: 如果 dataset 不存在则创建，已存在则设置 sharesmb=on
+    if !dataset_exists {
+        let output = Command::new("zfs")
+            .args([
+                "create",
+                "-o", "sharesmb=on",
+                "-o", "compression=lz4",
+                &dataset,
+            ])
+            .output();
+
+        match output {
+            Ok(result) => {
+                if !result.status.success() {
+                    let stderr = String::from_utf8_lossy(&result.stderr);
+                    return Response {
+                        success: false,
+                        data: None,
+                        error: Some(format!("Failed to create ZFS dataset '{}': {}", dataset, stderr)),
+                    };
+                }
+            }
+            Err(e) => {
+                return Response {
+                    success: false,
+                    data: None,
+                    error: Some(format!("Failed to execute zfs create '{}': {}", dataset, e)),
+                };
+            }
+        }
+    } else {
+        let output = Command::new("zfs")
+            .args(["set", "sharesmb=on", &dataset])
+            .output();
+
+        match output {
+            Ok(result) => {
+                if !result.status.success() {
+                    let stderr = String::from_utf8_lossy(&result.stderr);
+                    return Response {
+                        success: false,
+                        data: None,
+                        error: Some(format!("Failed to set sharesmb=on for dataset '{}': {}", dataset, stderr)),
+                    };
+                }
+            }
+            Err(e) => {
+                return Response {
+                    success: false,
+                    data: None,
+                    error: Some(format!("Failed to execute zfs set sharesmb=on '{}': {}", dataset, e)),
+                };
+            }
+        }
+    }
+
+    // Step 2: zfs set quota=<quota> <pool>/<share_name>（quota 为 none 时跳过）
+    if quota.to_lowercase() != "none" {
+        let output = Command::new("zfs")
+            .args([
+                "set",
+                &format!("quota={}", quota),
+                &dataset,
+            ])
+            .output();
+
+        match output {
+            Ok(result) => {
+                if !result.status.success() {
+                    let stderr = String::from_utf8_lossy(&result.stderr);
+                    let _ = Command::new("zfs").args(["destroy", &dataset]).output();
+                    return Response {
+                        success: false,
+                        data: None,
+                        error: Some(format!("Failed to set quota '{}': {}", quota, stderr)),
+                    };
+                }
+            }
+            Err(e) => {
+                let _ = Command::new("zfs").args(["destroy", &dataset]).output();
+                return Response {
+                    success: false,
+                    data: None,
+                    error: Some(format!("Failed to execute zfs set quota '{}': {}", quota, e)),
+                };
+            }
+        }
+    }
+
+    // Step 3: zfs set mountpoint=<mountpoint> <pool>/<share_name>
+    let output = Command::new("zfs")
+        .args([
+            "set",
+            &format!("mountpoint={}", &mountpoint),
+            &dataset,
+        ])
+        .output();
+
+    match output {
+        Ok(result) => {
+            if !result.status.success() {
+                let stderr = String::from_utf8_lossy(&result.stderr);
+                let _ = Command::new("zfs").args(["destroy", &dataset]).output();
+                return Response {
+                    success: false,
+                    data: None,
+                    error: Some(format!("Failed to set mountpoint '{}': {}", mountpoint, stderr)),
+                };
+            }
+        }
+        Err(e) => {
+            let _ = Command::new("zfs").args(["destroy", &dataset]).output();
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to execute zfs set mountpoint '{}': {}", mountpoint, e)),
+            };
+        }
+    }
+
+    // Step 4: chown -R <samba_user>:<samba_user> <mountpoint>
+    let output = Command::new("chown")
+        .args([
+            "-R",
+            &format!("{}:{}", samba_user, samba_user),
+            &mountpoint,
+        ])
+        .output();
+
+    match output {
+        Ok(result) => {
+            if !result.status.success() {
+                let stderr = String::from_utf8_lossy(&result.stderr);
+                let _ = Command::new("zfs").args(["destroy", &dataset]).output();
+                return Response {
+                    success: false,
+                    data: None,
+                    error: Some(format!("Failed to set ownership for user '{}': {}", samba_user, stderr)),
+                };
+            }
+        }
+        Err(e) => {
+            let _ = Command::new("zfs").args(["destroy", &dataset]).output();
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to execute chown for user '{}': {}", samba_user, e)),
+            };
+        }
+    }
+
+    let resp_data = CreateZfsShareResponse {
+        success: true,
+        message: format!(
+            "ZFS share '{}' created successfully on pool '{}', mounted at '{}' with quota '{}'",
+            share_name, dataset_name, mountpoint, quota
+        ),
+        error: None,
+    };
+    Response {
+        success: true,
+        data: serde_json::to_value(resp_data).ok(),
+        error: None,
+    }
+}
+
+/// 检查指定的用户名是否存在于 Samba 用户列表中（通过 pdbedit -L）
+fn check_samba_user_exists(username: &str) -> Result<bool, String> {
+    let output = Command::new("pdbedit")
+        .args(["-L"])
+        .output();
+
+    match output {
+        Ok(result) => {
+            if result.status.success() {
+                let stdout = String::from_utf8_lossy(&result.stdout);
+                let exists = stdout.lines().any(|line| {
+                    let parts: Vec<&str> = line.split(':').collect();
+                    !parts.is_empty() && parts[0] == username
+                });
+                Ok(exists)
+            } else {
+                let stderr = String::from_utf8_lossy(&result.stderr);
+                Err(format!("pdbedit command failed: {}", stderr))
+            }
+        }
+        Err(e) => Err(format!("Failed to execute pdbedit: {}", e)),
+    }
 }
