@@ -21,12 +21,11 @@ RuntimeDirectoryMode=0755
 
 # Security hardening
 NoNewPrivileges=true
-ProtectHome=true
-ProtectSystem=strict
+ProtectHome=false
+ProtectSystem=no
 ProtectKernelTunables=false
 ProtectKernelModules=false
 ProtectControlGroups=false
-BindPaths=/dev/disk/by-id /dev
 
 [Install]
 WantedBy=multi-user.target
