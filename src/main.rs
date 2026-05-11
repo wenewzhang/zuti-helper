@@ -20,12 +20,28 @@ pub struct CreatePoolResponse {
     pub error: Option<String>,
 }
 
+// export_pool 请求结构体
+#[derive(Deserialize, Debug)]
+pub struct ExportPoolRequest {
+    pub pool_name: String,
+}
+
+// export_pool 响应结构体
+#[derive(Serialize, Debug)]
+pub struct ExportPoolResponse {
+    pub success: bool,
+    pub message: String,
+    pub error: Option<String>,
+}
+
 // 通用请求包装
 #[derive(Deserialize, Debug)]
 #[serde(tag = "action")]
 pub enum Request {
     #[serde(rename = "create_pool")]
     CreatePool(CreatePoolRequest),
+    #[serde(rename = "export_pool")]
+    ExportPool(ExportPoolRequest),
 }
 
 // 通用响应包装
@@ -107,6 +123,7 @@ fn handle_connection(mut stream: UnixStream) {
 
         let resp = match request {
             Request::CreatePool(req) => handle_create_pool(req),
+            Request::ExportPool(req) => handle_export_pool(req),
         };
 
         if !send_response(&mut stream, &resp) {
@@ -130,6 +147,49 @@ fn send_response(stream: &mut UnixStream, resp: &Response) -> bool {
     }
 
     true
+}
+
+fn handle_export_pool(req: ExportPoolRequest) -> Response {
+    let pool_name = &req.pool_name;
+
+    // 验证 pool_name 不为空
+    if pool_name.is_empty() {
+        return Response {
+            success: false,
+            data: None,
+            error: Some("Pool name is required".to_string()),
+        };
+    }
+
+    // 执行 zpool export 命令
+    match Command::new("zpool").args(["export", pool_name]).output() {
+        Ok(output) => {
+            if output.status.success() {
+                let resp_data = ExportPoolResponse {
+                    success: true,
+                    message: format!("Pool '{}' exported successfully", pool_name),
+                    error: None,
+                };
+                Response {
+                    success: true,
+                    data: serde_json::to_value(resp_data).ok(),
+                    error: None,
+                }
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                Response {
+                    success: false,
+                    data: None,
+                    error: Some(format!("Failed to export pool '{}': {}", pool_name, stderr)),
+                }
+            }
+        }
+        Err(e) => Response {
+            success: false,
+            data: None,
+            error: Some(format!("Failed to execute zpool export for '{}': {}", pool_name, e)),
+        },
+    }
 }
 
 fn handle_create_pool(req: CreatePoolRequest) -> Response {
