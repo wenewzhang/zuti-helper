@@ -49,6 +49,22 @@ pub struct ImportPoolResponse {
     pub error: Option<String>,
 }
 
+// create_directory 请求结构体
+#[derive(Deserialize, Debug)]
+pub struct CreateDirectoryRequest {
+    pub directory: String,
+    pub owner: String,
+    pub arg: String, // 权限模式，如 "755"
+}
+
+// create_directory 响应结构体
+#[derive(Serialize, Debug)]
+pub struct CreateDirectoryResponse {
+    pub success: bool,
+    pub message: String,
+    pub error: Option<String>,
+}
+
 // 通用请求包装
 #[derive(Deserialize, Debug)]
 #[serde(tag = "action")]
@@ -59,6 +75,8 @@ pub enum Request {
     ExportPool(ExportPoolRequest),
     #[serde(rename = "import_pool")]
     ImportPool(ImportPoolRequest),
+    #[serde(rename = "create_directory")]
+    CreateDirectory(CreateDirectoryRequest),
 }
 
 // 通用响应包装
@@ -142,6 +160,7 @@ fn handle_connection(mut stream: UnixStream) {
             Request::CreatePool(req) => handle_create_pool(req),
             Request::ExportPool(req) => handle_export_pool(req),
             Request::ImportPool(req) => handle_import_pool(req),
+            Request::CreateDirectory(req) => handle_create_directory(req),
         };
 
         if !send_response(&mut stream, &resp) {
@@ -272,6 +291,114 @@ fn handle_export_pool(req: ExportPoolRequest) -> Response {
             data: None,
             error: Some(format!("Failed to execute zpool export for '{}': {}", pool_name, e)),
         },
+    }
+}
+
+fn handle_create_directory(req: CreateDirectoryRequest) -> Response {
+    let directory = &req.directory;
+    let owner = &req.owner;
+    let arg = &req.arg;
+
+    // 验证 directory 不为空
+    if directory.is_empty() {
+        return Response {
+            success: false,
+            data: None,
+            error: Some("Directory path is required".to_string()),
+        };
+    }
+
+    // 1. 创建目录
+    match Command::new("mkdir").arg("-p").arg(directory).output() {
+        Ok(output) => {
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Response {
+                    success: false,
+                    data: None,
+                    error: Some(format!("Failed to create directory '{}': {}", directory, stderr)),
+                };
+            }
+        }
+        Err(e) => {
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to execute mkdir for '{}': {}", directory, e)),
+            };
+        }
+    }
+
+    // 2. 设置拥有者
+    if !owner.is_empty() {
+        match Command::new("chown").arg(owner).arg(directory).output() {
+            Ok(output) => {
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    return Response {
+                        success: false,
+                        data: None,
+                        error: Some(format!(
+                            "Failed to chown directory '{}' to '{}': {}",
+                            directory, owner, stderr
+                        )),
+                    };
+                }
+            }
+            Err(e) => {
+                return Response {
+                    success: false,
+                    data: None,
+                    error: Some(format!(
+                        "Failed to execute chown for '{}': {}",
+                        directory, e
+                    )),
+                };
+            }
+        }
+    }
+
+    // 3. 设置权限
+    if !arg.is_empty() {
+        match Command::new("chmod").arg(arg).arg(directory).output() {
+            Ok(output) => {
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    return Response {
+                        success: false,
+                        data: None,
+                        error: Some(format!(
+                            "Failed to chmod directory '{}' with '{}': {}",
+                            directory, arg, stderr
+                        )),
+                    };
+                }
+            }
+            Err(e) => {
+                return Response {
+                    success: false,
+                    data: None,
+                    error: Some(format!(
+                        "Failed to execute chmod for '{}': {}",
+                        directory, e
+                    )),
+                };
+            }
+        }
+    }
+
+    let resp_data = CreateDirectoryResponse {
+        success: true,
+        message: format!(
+            "Directory '{}' created with owner '{}' and permissions '{}'",
+            directory, owner, arg
+        ),
+        error: None,
+    };
+    Response {
+        success: true,
+        data: serde_json::to_value(resp_data).ok(),
+        error: None,
     }
 }
 
