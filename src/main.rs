@@ -34,6 +34,21 @@ pub struct ExportPoolResponse {
     pub error: Option<String>,
 }
 
+// import_pool 请求结构体
+#[derive(Deserialize, Debug)]
+pub struct ImportPoolRequest {
+    pub pool_name: String,
+    pub dir: Option<String>,
+}
+
+// import_pool 响应结构体
+#[derive(Serialize, Debug)]
+pub struct ImportPoolResponse {
+    pub success: bool,
+    pub message: String,
+    pub error: Option<String>,
+}
+
 // 通用请求包装
 #[derive(Deserialize, Debug)]
 #[serde(tag = "action")]
@@ -42,6 +57,8 @@ pub enum Request {
     CreatePool(CreatePoolRequest),
     #[serde(rename = "export_pool")]
     ExportPool(ExportPoolRequest),
+    #[serde(rename = "import_pool")]
+    ImportPool(ImportPoolRequest),
 }
 
 // 通用响应包装
@@ -124,6 +141,7 @@ fn handle_connection(mut stream: UnixStream) {
         let resp = match request {
             Request::CreatePool(req) => handle_create_pool(req),
             Request::ExportPool(req) => handle_export_pool(req),
+            Request::ImportPool(req) => handle_import_pool(req),
         };
 
         if !send_response(&mut stream, &resp) {
@@ -147,6 +165,71 @@ fn send_response(stream: &mut UnixStream, resp: &Response) -> bool {
     }
 
     true
+}
+
+fn handle_import_pool(req: ImportPoolRequest) -> Response {
+    let pool_name = &req.pool_name;
+
+    // 验证 pool_name 不为空
+    if pool_name.is_empty() {
+        return Response {
+            success: false,
+            data: None,
+            error: Some("Pool name is required".to_string()),
+        };
+    }
+
+    // 构建 zpool import 命令
+    let import_result = if let Some(ref dir) = req.dir {
+        if dir.is_empty() {
+            // dir 为空字符串时，等同于 null
+            Command::new("zpool")
+                .args(["import", pool_name])
+                .output()
+        } else {
+            // dir 有值时，使用 -R 选项
+            Command::new("zpool")
+                .args(["import", "-R", dir, pool_name])
+                .output()
+        }
+    } else {
+        // dir 为 null
+        Command::new("zpool")
+            .args(["import", pool_name])
+            .output()
+    };
+
+    match import_result {
+        Ok(output) => {
+            if output.status.success() {
+                let resp_data = ImportPoolResponse {
+                    success: true,
+                    message: format!("Pool '{}' imported successfully", pool_name),
+                    error: None,
+                };
+                Response {
+                    success: true,
+                    data: serde_json::to_value(resp_data).ok(),
+                    error: None,
+                }
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                Response {
+                    success: false,
+                    data: None,
+                    error: Some(format!("Failed to import pool '{}': {}", pool_name, stderr)),
+                }
+            }
+        }
+        Err(e) => Response {
+            success: false,
+            data: None,
+            error: Some(format!(
+                "Failed to execute zpool import for '{}': {}",
+                pool_name, e
+            )),
+        },
+    }
 }
 
 fn handle_export_pool(req: ExportPoolRequest) -> Response {
