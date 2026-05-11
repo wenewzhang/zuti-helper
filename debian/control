@@ -1,0 +1,16 @@
+Source: zuti-helper
+Section: admin
+Priority: optional
+Maintainer: Wenew Zhang <wenewboy@gmail.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.0
+
+Package: zuti-helper
+Architecture: any
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         libc6
+Description: Zuti Helper - Local Privilege Helper for Storage Management
+ Zuti Helper is a local privilege escalation daemon for OneNAS SCALE.
+ It provides a Unix socket interface for the Zuti web UI to perform
+ privileged storage operations safely.

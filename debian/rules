@@ -1,0 +1,17 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE = 1
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	 [ -f "$$HOME/.cargo/env" ] && . "$$HOME/.cargo/env"; cargo build --release
+
+override_dh_auto_install:
+	install -D -m 755 target/release/zuti-helper debian/zuti-helper/usr/bin/zuti-helper
+	install -D -m 644 zuti-helper.service debian/zuti-helper/usr/lib/systemd/system/zuti-helper.service
+
+override_dh_auto_clean:
+	 [ -f "$$HOME/.cargo/env" ] && . "$$HOME/.cargo/env"; cargo clean
+	dh_auto_clean
