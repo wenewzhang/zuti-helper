@@ -1,0 +1,23 @@
+[package]
+name = "zuti-helper"
+version = "0.1.0"
+edition = "2024"
+authors = ["Wenew Zhang<wenewboy@gmail.com>"]
+description = "Zuti Helper - Local privilege helper for storage management"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+
+[package.metadata.deb]
+maintainer = "Wenew Zhang<wenewboy@gmail.com>"
+copyright = "2026 Your Name"
+extended-description = "A local privilege helper daemon for disk and storage pool management"
+section = "admin"
+priority = "optional"
+assets = [
+    ["target/release/zuti-helper", "usr/bin/zuti-helper", "4755"],
+]
+depends = "libc6"
