@@ -39,6 +39,7 @@ pub struct ExportPoolResponse {
 pub struct ImportPoolRequest {
     pub pool_name: String,
     pub mount_point: Option<String>,
+    pub boot_enabled: Option<bool>,
 }
 
 // import_pool 响应结构体
@@ -241,6 +242,44 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
     match import_result {
         Ok(output) => {
             if output.status.success() {
+                // 设置 mountpoint
+                if let Some(ref dir) = req.mount_point {
+                    if !dir.is_empty() {
+                        let mountpoint_result = Command::new("zfs")
+                            .args(["set", &format!("mountpoint={}", dir), pool_name])
+                            .output();
+                        if let Err(e) = mountpoint_result {
+                            return Response {
+                                success: false,
+                                data: None,
+                                error: Some(format!(
+                                    "Pool '{}' imported but failed to set mountpoint: {}",
+                                    pool_name, e
+                                )),
+                            };
+                        }
+                    }
+                }
+                // 设置 canmount
+                let canmount_value = if req.boot_enabled == Some(true) {
+                    "on"
+                } else {
+                    "noauto"
+                };
+                let canmount_result = Command::new("zfs")
+                    .args(["set", &format!("canmount={}", canmount_value), pool_name])
+                    .output();
+                if let Err(e) = canmount_result {
+                    return Response {
+                        success: false,
+                        data: None,
+                        error: Some(format!(
+                            "Pool '{}' imported but failed to set canmount: {}",
+                            pool_name, e
+                        )),
+                    };
+                }
+
                 let resp_data = ImportPoolResponse {
                     success: true,
                     message: format!("Pool '{}' imported successfully", pool_name),
