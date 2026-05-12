@@ -3,6 +3,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 // create_pool 请求结构体
 #[derive(Deserialize, Debug)]
@@ -219,42 +220,6 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
         };
     }
 
-    if let Some(ref dir) = req.mount_point {
-        if !dir.is_empty() {
-            let mountpoint_result = Command::new("zfs")
-                .args(["set", &format!("mountpoint={}", dir), pool_name])
-                .output();
-            if let Err(e) = mountpoint_result {
-                return Response {
-                    success: false,
-                    data: None,
-                    error: Some(format!(
-                        "Pool '{}' failed to set mountpoint: {}",
-                        pool_name, e
-                    )),
-                };
-            }
-        }
-    }
-    // 设置 canmount
-    let canmount_value = if req.boot_enabled == Some(true) {
-        "on"
-    } else {
-        "noauto"
-    };
-    let canmount_result = Command::new("zfs")
-        .args(["set", &format!("canmount={}", canmount_value), pool_name])
-        .output();
-    if let Err(e) = canmount_result {
-        return Response {
-            success: false,
-            data: None,
-            error: Some(format!(
-                "Pool '{}' failed to set canmount: {}",
-                pool_name, e
-            )),
-        };
-    }
     // 构建 zpool import 命令
     let import_result = if let Some(ref mount_point) = req.mount_point {
         if mount_point.is_empty() {
@@ -263,10 +228,125 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
                 .args(["import", pool_name])
                 .output()
         } else {
-            // mount_point 有值时，使用 -R 选项
-            Command::new("zpool")
-                .args(["import", "-R", mount_point, pool_name])
-                .output()
+            // mount_point 有值时，先临时导入设置 mountpoint，再正常导入
+            let temp_dir = format!(
+                "/tmp/zuti_helper_{}_{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            );
+            if let Err(e) = std::fs::create_dir_all(&temp_dir) {
+                return Response {
+                    success: false,
+                    data: None,
+                    error: Some(format!("Failed to create temp dir '{}': {}", temp_dir, e)),
+                };
+            }
+
+            // 1. 临时导入: zpool import -o readonly=on -R <temp_dir> <pool>
+            let temp_import = Command::new("zpool")
+                .args(["import", "-o", "readonly=on", "-R", &temp_dir, pool_name])
+                .output();
+            match temp_import {
+                Ok(output) if output.status.success() => {}
+                Ok(output) => {
+                    let _ = std::fs::remove_dir_all(&temp_dir);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    return Response {
+                        success: false,
+                        data: None,
+                        error: Some(format!(
+                            "Failed to temp import pool '{}': {}",
+                            pool_name, stderr
+                        )),
+                    };
+                }
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&temp_dir);
+                    return Response {
+                        success: false,
+                        data: None,
+                        error: Some(format!(
+                            "Failed to execute temp zpool import for '{}': {}",
+                            pool_name, e
+                        )),
+                    };
+                }
+            }
+
+            // 2. 设置 mountpoint
+            let set_mp = Command::new("zfs")
+                .args(["set", &format!("mountpoint={}", mount_point), pool_name])
+                .output();
+            match set_mp {
+                Ok(output) if output.status.success() => {}
+                Ok(output) => {
+                    let _ = std::fs::remove_dir_all(&temp_dir);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    return Response {
+                        success: false,
+                        data: None,
+                        error: Some(format!(
+                            "Failed to set mountpoint for '{}': {}",
+                            pool_name, stderr
+                        )),
+                    };
+                }
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&temp_dir);
+                    return Response {
+                        success: false,
+                        data: None,
+                        error: Some(format!(
+                            "Failed to execute zfs set mountpoint for '{}': {}",
+                            pool_name, e
+                        )),
+                    };
+                }
+            }
+
+            // 3. 导出
+            let export_result = Command::new("zpool")
+                .args(["export", pool_name])
+                .output();
+            match export_result {
+                Ok(output) if output.status.success() => {}
+                Ok(output) => {
+                    let _ = std::fs::remove_dir_all(&temp_dir);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    return Response {
+                        success: false,
+                        data: None,
+                        error: Some(format!(
+                            "Failed to export pool '{}': {}",
+                            pool_name, stderr
+                        )),
+                    };
+                }
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&temp_dir);
+                    return Response {
+                        success: false,
+                        data: None,
+                        error: Some(format!(
+                            "Failed to execute zpool export for '{}': {}",
+                            pool_name, e
+                        )),
+                    };
+                }
+            }
+
+            // 4. 正常导入
+            let final_import = Command::new("zpool")
+                .args(["import", pool_name])
+                .output();
+
+            // 清理临时目录
+            let _ = std::fs::remove_dir_all(&temp_dir);
+
+            final_import
         }
     } else {
         // mount_point 为 null
@@ -277,7 +357,26 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
 
     match import_result {
         Ok(output) => {
-            if output.status.success() {                
+            if output.status.success() {             
+                // 设置 canmount
+                let canmount_value = if req.boot_enabled == Some(true) {
+                    "on"
+                } else {
+                    "noauto"
+                };
+                let canmount_result = Command::new("zfs")
+                    .args(["set", &format!("canmount={}", canmount_value), pool_name])
+                    .output();
+                if let Err(e) = canmount_result {
+                    return Response {
+                        success: false,
+                        data: None,
+                        error: Some(format!(
+                            "Pool '{}' failed to set canmount: {}",
+                            pool_name, e
+                        )),
+                    };
+                }                   
                 let resp_data = ImportPoolResponse {
                     success: true,
                     message: format!("Pool '{}' imported successfully", pool_name),
