@@ -247,7 +247,7 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
 
             // 1. 临时导入: zpool import -o readonly=on -R <temp_dir> <pool>
             let temp_import = Command::new("zpool")
-                .args(["import", "-o", "readonly=on", "-R", &temp_dir, pool_name])
+                .args(["import", "-R", &temp_dir, pool_name])
                 .output();
             match temp_import {
                 Ok(output) if output.status.success() => {}
