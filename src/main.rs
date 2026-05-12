@@ -38,7 +38,7 @@ pub struct ExportPoolResponse {
 #[derive(Deserialize, Debug)]
 pub struct ImportPoolRequest {
     pub pool_name: String,
-    pub dir: Option<String>,
+    pub mount_point: Option<String>,
 }
 
 // import_pool 响应结构体
@@ -219,20 +219,20 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
     }
 
     // 构建 zpool import 命令
-    let import_result = if let Some(ref dir) = req.dir {
-        if dir.is_empty() {
-            // dir 为空字符串时，等同于 null
+    let import_result = if let Some(ref mount_point) = req.mount_point {
+        if mount_point.is_empty() {
+            // mount_point 为空字符串时，等同于 null
             Command::new("zpool")
                 .args(["import", pool_name])
                 .output()
         } else {
-            // dir 有值时，使用 -R 选项
+            // mount_point 有值时，使用 -R 选项
             Command::new("zpool")
-                .args(["import", "-R", dir, pool_name])
+                .args(["import", "-R", mount_point, pool_name])
                 .output()
         }
     } else {
-        // dir 为 null
+        // mount_point 为 null
         Command::new("zpool")
             .args(["import", pool_name])
             .output()
