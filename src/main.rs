@@ -219,6 +219,42 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
         };
     }
 
+    if let Some(ref dir) = req.mount_point {
+        if !dir.is_empty() {
+            let mountpoint_result = Command::new("zfs")
+                .args(["set", &format!("mountpoint={}", dir), pool_name])
+                .output();
+            if let Err(e) = mountpoint_result {
+                return Response {
+                    success: false,
+                    data: None,
+                    error: Some(format!(
+                        "Pool '{}' failed to set mountpoint: {}",
+                        pool_name, e
+                    )),
+                };
+            }
+        }
+    }
+    // 设置 canmount
+    let canmount_value = if req.boot_enabled == Some(true) {
+        "on"
+    } else {
+        "noauto"
+    };
+    let canmount_result = Command::new("zfs")
+        .args(["set", &format!("canmount={}", canmount_value), pool_name])
+        .output();
+    if let Err(e) = canmount_result {
+        return Response {
+            success: false,
+            data: None,
+            error: Some(format!(
+                "Pool '{}' failed to set canmount: {}",
+                pool_name, e
+            )),
+        };
+    }
     // 构建 zpool import 命令
     let import_result = if let Some(ref mount_point) = req.mount_point {
         if mount_point.is_empty() {
@@ -241,45 +277,7 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
 
     match import_result {
         Ok(output) => {
-            if output.status.success() {
-                // 设置 mountpoint
-                if let Some(ref dir) = req.mount_point {
-                    if !dir.is_empty() {
-                        let mountpoint_result = Command::new("zfs")
-                            .args(["set", &format!("mountpoint={}", dir), pool_name])
-                            .output();
-                        if let Err(e) = mountpoint_result {
-                            return Response {
-                                success: false,
-                                data: None,
-                                error: Some(format!(
-                                    "Pool '{}' imported but failed to set mountpoint: {}",
-                                    pool_name, e
-                                )),
-                            };
-                        }
-                    }
-                }
-                // 设置 canmount
-                let canmount_value = if req.boot_enabled == Some(true) {
-                    "on"
-                } else {
-                    "noauto"
-                };
-                let canmount_result = Command::new("zfs")
-                    .args(["set", &format!("canmount={}", canmount_value), pool_name])
-                    .output();
-                if let Err(e) = canmount_result {
-                    return Response {
-                        success: false,
-                        data: None,
-                        error: Some(format!(
-                            "Pool '{}' imported but failed to set canmount: {}",
-                            pool_name, e
-                        )),
-                    };
-                }
-
+            if output.status.success() {                
                 let resp_data = ImportPoolResponse {
                     success: true,
                     message: format!("Pool '{}' imported successfully", pool_name),
