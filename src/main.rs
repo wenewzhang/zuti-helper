@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -76,6 +77,20 @@ pub struct CreateZfsShareRequest {
     pub samba_user: String,
 }
 
+// upgrade 请求结构体
+#[derive(Deserialize, Debug)]
+pub struct UpgradeRequest {
+    pub file: String,
+}
+
+// upgrade 响应结构体
+#[derive(Serialize, Debug)]
+pub struct UpgradeResponse {
+    pub success: bool,
+    pub message: String,
+    pub error: Option<String>,
+}
+
 // create_zfs_share 响应结构体
 #[derive(Serialize, Debug)]
 pub struct CreateZfsShareResponse {
@@ -98,6 +113,8 @@ pub enum Request {
     CreateDirectory(CreateDirectoryRequest),
     #[serde(rename = "create_zfs_share")]
     CreateZfsShare(CreateZfsShareRequest),
+    #[serde(rename = "upgrade")]
+    Upgrade(UpgradeRequest),
 }
 
 // 通用响应包装
@@ -183,6 +200,7 @@ fn handle_connection(mut stream: UnixStream) {
             Request::ImportPool(req) => handle_import_pool(req),
             Request::CreateDirectory(req) => handle_create_directory(req),
             Request::CreateZfsShare(req) => handle_create_zfs_share(req),
+            Request::Upgrade(req) => handle_upgrade(req),
         };
 
         if !send_response(&mut stream, &resp) {
@@ -1027,5 +1045,381 @@ fn check_samba_user_exists(username: &str) -> Result<bool, String> {
             }
         }
         Err(e) => Err(format!("Failed to execute pdbedit: {}", e)),
+    }
+}
+
+
+fn handle_upgrade(req: UpgradeRequest) -> Response {
+    let file = &req.file;
+
+    // 验证 file 不为空且文件存在
+    if file.is_empty() {
+        return Response {
+            success: false,
+            data: None,
+            error: Some("File path is required".to_string()),
+        };
+    }
+    if !std::path::Path::new(file).exists() {
+        return Response {
+            success: false,
+            data: None,
+            error: Some(format!("File '{}' does not exist", file)),
+        };
+    }
+
+    // 1. 创建临时挂载目录并挂载 squashfs
+    let mount_dir = format!(
+        "/tmp/zuti_helper_upgrade_mount_{}_{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    );
+    if let Err(e) = std::fs::create_dir_all(&mount_dir) {
+        return Response {
+            success: false,
+            data: None,
+            error: Some(format!("Failed to create mount dir '{}': {}", mount_dir, e)),
+        };
+    }
+
+    let mount_result = Command::new("mount")
+        .args(["-t", "squashfs", file, &mount_dir])
+        .output();
+    match mount_result {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            let _ = std::fs::remove_dir_all(&mount_dir);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to mount squashfs '{}': {}", file, stderr)),
+            };
+        }
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&mount_dir);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to execute mount for '{}': {}", file, e)),
+            };
+        }
+    }
+
+    // 2. 读取 manifest.json
+    let manifest_path = format!("{}/manifest.json", mount_dir);
+    let mut manifest_file = match File::open(&manifest_path) {
+        Ok(f) => f,
+        Err(e) => {
+            let _ = Command::new("umount").arg(&mount_dir).output();
+            let _ = std::fs::remove_dir_all(&mount_dir);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to open manifest.json: {}", e)),
+            };
+        }
+    };
+    let mut manifest_str = String::new();
+    if let Err(e) = manifest_file.read_to_string(&mut manifest_str) {
+        let _ = Command::new("umount").arg(&mount_dir).output();
+        let _ = std::fs::remove_dir_all(&mount_dir);
+        return Response {
+            success: false,
+            data: None,
+            error: Some(format!("Failed to read manifest.json: {}", e)),
+        };
+    }
+    let manifest: serde_json::Value = match serde_json::from_str(&manifest_str) {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = Command::new("umount").arg(&mount_dir).output();
+            let _ = std::fs::remove_dir_all(&mount_dir);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to parse manifest.json: {}", e)),
+            };
+        }
+    };
+    let version = match manifest.get("version").and_then(|v| v.as_str()) {
+        Some(v) => v,
+        None => {
+            let _ = Command::new("umount").arg(&mount_dir).output();
+            let _ = std::fs::remove_dir_all(&mount_dir);
+            return Response {
+                success: false,
+                data: None,
+                error: Some("manifest.json missing 'version' field".to_string()),
+            };
+        }
+    };
+
+    let pool_name = "one-pool";
+    let dataset_name = format!("{}/ROOT/{}", pool_name, version);
+
+    // 3. udevadm trigger
+    if let Err(e) = Command::new("udevadm").arg("trigger").output() {
+        let _ = Command::new("umount").arg(&mount_dir).output();
+        let _ = std::fs::remove_dir_all(&mount_dir);
+        return Response {
+            success: false,
+            data: None,
+            error: Some(format!("Failed to execute udevadm trigger: {}", e)),
+        };
+    }
+
+    // 4. 创建临时目录 /mnt/xxx
+    let tmpdir = format!(
+        "/mnt/zuti_helper_upgrade_{}_{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    );
+    if let Err(e) = std::fs::create_dir_all(&tmpdir) {
+        let _ = Command::new("umount").arg(&mount_dir).output();
+        let _ = std::fs::remove_dir_all(&mount_dir);
+        return Response {
+            success: false,
+            data: None,
+            error: Some(format!("Failed to create tmpdir '{}': {}", tmpdir, e)),
+        };
+    }
+
+    // 5. zfs create -o canmount=noauto -o mountpoint=/ <dataset>
+    let zfs_create = Command::new("zfs")
+        .args(["create", "-o", "canmount=noauto", "-o", "mountpoint=/", &dataset_name])
+        .output();
+    match zfs_create {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!(
+                    "Failed to create ZFS dataset '{}': {}",
+                    dataset_name, stderr
+                )),
+            };
+        }
+        Err(e) => {
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!(
+                    "Failed to execute zfs create for '{}': {}",
+                    dataset_name, e
+                )),
+            };
+        }
+    }
+
+    // 6. zpool set bootfs=<dataset> <pool>
+    let zpool_set = Command::new("zpool")
+        .args(["set", &format!("bootfs={}", dataset_name), pool_name])
+        .output();
+    match zpool_set {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!(
+                    "Failed to set bootfs for '{}': {}",
+                    dataset_name, stderr
+                )),
+            };
+        }
+        Err(e) => {
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!(
+                    "Failed to execute zpool set bootfs for '{}': {}",
+                    dataset_name, e
+                )),
+            };
+        }
+    }
+
+    // 7. zpool export -f <pool>
+    let zpool_export = Command::new("zpool")
+        .args(["export", "-f", pool_name])
+        .output();
+    match zpool_export {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to export pool '{}': {}", pool_name, stderr)),
+            };
+        }
+        Err(e) => {
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!(
+                    "Failed to execute zpool export for '{}': {}",
+                    pool_name, e
+                )),
+            };
+        }
+    }
+
+    // 8. zpool import -f -R <tmpdir> <pool>
+    let zpool_import = Command::new("zpool")
+        .args(["import", "-f", "-R", &tmpdir, pool_name])
+        .output();
+    match zpool_import {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to import pool '{}': {}", pool_name, stderr)),
+            };
+        }
+        Err(e) => {
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!(
+                    "Failed to execute zpool import for '{}': {}",
+                    pool_name, e
+                )),
+            };
+        }
+    }
+
+    // 9. zfs mount <dataset>
+    let zfs_mount = Command::new("zfs")
+        .args(["mount", &dataset_name])
+        .output();
+    match zfs_mount {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!(
+                    "Failed to mount dataset '{}': {}",
+                    dataset_name, stderr
+                )),
+            };
+        }
+        Err(e) => {
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!(
+                    "Failed to execute zfs mount for '{}': {}",
+                    dataset_name, e
+                )),
+            };
+        }
+    }
+
+    // 10. 检查 mountpoint
+    if !is_mountpoint(&tmpdir) {
+        cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+        return Response {
+            success: false,
+            data: None,
+            error: Some(format!("Mountpoint '{}' is not mounted", tmpdir)),
+        };
+    }
+
+    // 11. unsquashfs -d <tmpdir> -f -da 16 -fr 16 <mount_dir>/rootfs.squashfs
+    let rootfs_path = format!("{}/rootfs.squashfs", mount_dir);
+    let unsquashfs = Command::new("unsquashfs")
+        .args(["-d", &tmpdir, "-f", "-da", "16", "-fr", "16", &rootfs_path])
+        .output();
+    match unsquashfs {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to unsquashfs '{}': {}", rootfs_path, stderr)),
+            };
+        }
+        Err(e) => {
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!(
+                    "Failed to execute unsquashfs '{}': {}",
+                    rootfs_path, e
+                )),
+            };
+        }
+    }
+
+    // 12. 卸载 mount_dir 并清理
+    let _ = Command::new("umount").arg(&mount_dir).output();
+    let _ = std::fs::remove_dir_all(&mount_dir);
+
+    let resp_data = UpgradeResponse {
+        success: true,
+        message: format!(
+            "Upgrade successful: dataset '{}' created and rootfs extracted",
+            dataset_name
+        ),
+        error: None,
+    };
+    Response {
+        success: true,
+        data: serde_json::to_value(resp_data).ok(),
+        error: None,
+    }
+}
+
+/// 清理 upgrade 过程中产生的临时资源（尽力而为）
+fn cleanup_upgrade(mount_dir: &str, tmpdir: &str, dataset_name: &str, pool_name: &str) {
+    let _ = Command::new("umount").arg(tmpdir).output();
+    let _ = Command::new("zfs").args(["umount", dataset_name]).output();
+    let _ = Command::new("zpool").args(["export", "-f", pool_name]).output();
+    let _ = Command::new("umount").arg(mount_dir).output();
+    let _ = std::fs::remove_dir_all(mount_dir);
+    let _ = std::fs::remove_dir_all(tmpdir);
+}
+
+/// 检查指定路径是否为挂载点（通过比较当前目录与父目录的 device id）
+fn is_mountpoint(path: &str) -> bool {
+    match std::fs::metadata(path) {
+        Ok(meta) => {
+            let parent = std::path::Path::new(path)
+                .parent()
+                .unwrap_or(std::path::Path::new("/"));
+            match std::fs::metadata(parent) {
+                Ok(parent_meta) => meta.dev() != parent_meta.dev(),
+                Err(_) => false,
+            }
+        }
+        Err(_) => false,
     }
 }
