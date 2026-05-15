@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::collections::HashSet;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1190,6 +1191,38 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
             error: Some(format!("Failed to create tmpdir '{}': {}", tmpdir, e)),
         };
     }
+
+    // 4.5 检查 dataset 是否已存在,如存在则生成新名称
+    let dataset_name = if let Ok(output) = Command::new("zfs")
+        .args(["list", "-H", "-o", "name"])
+        .output()
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let existing_datasets: HashSet<String> = stdout
+                .lines()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if existing_datasets.contains(&dataset_name) {
+                let mut new_name = dataset_name.clone();
+                for i in 1.. {
+                    let probe = format!("{}-{}", dataset_name, i);
+                    if !existing_datasets.contains(&probe) {
+                        new_name = probe;
+                        break;
+                    }
+                }
+                new_name
+            } else {
+                dataset_name
+            }
+        } else {
+            dataset_name
+        }
+    } else {
+        dataset_name
+    };
 
     // 5. zfs create -o canmount=noauto -o mountpoint=/ <dataset>
     let zfs_create = Command::new("zfs")
