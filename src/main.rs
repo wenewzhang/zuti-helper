@@ -7,17 +7,21 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod models;
+mod config;
 use models::*;
+use config::logger;
 
 const POOL_NAME: &str = "one-pool";
 
 fn main() {
+    logger::init_logger();
+
     let socket_path = "/run/zuti-helper.sock";
 
     // 如果 socket 文件已存在，先删除
     if std::path::Path::new(socket_path).exists() {
         if let Err(e) = std::fs::remove_file(socket_path) {
-            eprintln!("Failed to remove existing socket: {}", e);
+            log::error!("Failed to remove existing socket: {}", e);
             std::process::exit(1);
         }
     }
@@ -25,18 +29,18 @@ fn main() {
     let listener = match UnixListener::bind(socket_path) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("Failed to bind to {}: {}", socket_path, e);
+            log::error!("Failed to bind to {}: {}", socket_path, e);
             std::process::exit(1);
         }
     };
 
     // 设置 socket 文件权限，允许所有本地用户连接
     if let Err(e) = std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o666)) {
-        eprintln!("Failed to set socket permissions: {}", e);
+        log::error!("Failed to set socket permissions: {}", e);
         std::process::exit(1);
     }
 
-    println!("zuti-helper listening on {}", socket_path);
+    log::info!("zuti-helper listening on {}", socket_path);
 
     for stream in listener.incoming() {
         match stream {
@@ -44,19 +48,19 @@ fn main() {
                 std::thread::spawn(|| handle_connection(stream));
             }
             Err(e) => {
-                eprintln!("Connection failed: {}", e);
+                log::error!("Connection failed: {}", e);
             }
         }
     }
 }
 
 fn handle_connection(mut stream: UnixStream) {
-    println!("New connection from: {:?}", stream.peer_addr());
+    log::info!("New connection from: {:?}", stream.peer_addr());
 
     let reader = match stream.try_clone() {
         Ok(r) => BufReader::new(r),
         Err(e) => {
-            eprintln!("Failed to clone stream: {}", e);
+            log::error!("Failed to clone stream: {}", e);
             return;
         }
     };
@@ -99,13 +103,13 @@ fn send_response(stream: &mut UnixStream, resp: &Response) -> bool {
     let json = match serde_json::to_string(resp) {
         Ok(j) => j,
         Err(e) => {
-            eprintln!("Failed to serialize response: {}", e);
+            log::error!("Failed to serialize response: {}", e);
             return false;
         }
     };
 
     if let Err(e) = writeln!(stream, "{}", json) {
-        eprintln!("Failed to write response: {}", e);
+        log::error!("Failed to write response: {}", e);
         return false;
     }
 
