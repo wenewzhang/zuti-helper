@@ -1116,7 +1116,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
         Ok(output) if output.status.success() => {}
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, POOL_NAME);
+            cleanup_upgrade(&mount_dir, &tmpdir);
             return Response {
                 success: false,
                 data: None,
@@ -1127,7 +1127,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
             };
         }
         Err(e) => {
-            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, POOL_NAME);
+            cleanup_upgrade(&mount_dir, &tmpdir);
             return Response {
                 success: false,
                 data: None,
@@ -1147,7 +1147,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
         Ok(output) if output.status.success() => {}
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, POOL_NAME);
+            cleanup_upgrade(&mount_dir, &tmpdir);
             return Response {
                 success: false,
                 data: None,
@@ -1158,7 +1158,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
             };
         }
         Err(e) => {
-            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, POOL_NAME);
+            cleanup_upgrade(&mount_dir, &tmpdir);
             return Response {
                 success: false,
                 data: None,
@@ -1172,7 +1172,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
 
     // 10. 检查 mountpoint
     if !is_mountpoint(&tmpdir) {
-        cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, POOL_NAME);
+        cleanup_upgrade(&mount_dir, &tmpdir);
         return Response {
             success: false,
             data: None,
@@ -1189,7 +1189,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
         Ok(output) if output.status.success() => {}
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, POOL_NAME);
+            cleanup_upgrade(&mount_dir, &tmpdir);
             return Response {
                 success: false,
                 data: None,
@@ -1197,7 +1197,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
             };
         }
         Err(e) => {
-            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, POOL_NAME);
+            cleanup_upgrade(&mount_dir, &tmpdir);
             return Response {
                 success: false,
                 data: None,
@@ -1232,13 +1232,13 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
 }
 
 /// 清理 upgrade 过程中产生的临时资源（尽力而为）
-fn cleanup_upgrade(mount_dir: &str, tmpdir: &str, dataset_name: &str, pool_name: &str) {
+fn cleanup_upgrade(mount_dir: &str, tmpdir: &str) {
     let _ = Command::new("umount").arg(tmpdir).output();
-    let _ = Command::new("zfs").args(["umount", dataset_name]).output();
-    let _ = Command::new("zpool").args(["export", "-f", pool_name]).output();
+    // let _ = Command::new("zfs").args(["umount", dataset_name]).output();
+    // let _ = Command::new("zpool").args(["export", "-f", pool_name]).output();
     let _ = Command::new("umount").arg(mount_dir).output();
-    let _ = std::fs::remove_dir_all(mount_dir);
-    let _ = std::fs::remove_dir_all(tmpdir);
+    // let _ = std::fs::remove_dir_all(mount_dir);
+    // let _ = std::fs::remove_dir_all(tmpdir);
 }
 
 /// 检查指定路径是否为挂载点（通过比较当前目录与父目录的 device id）
