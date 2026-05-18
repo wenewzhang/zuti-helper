@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::collections::HashSet;
 use std::process::Command;
@@ -1241,18 +1241,12 @@ fn cleanup_upgrade(mount_dir: &str, tmpdir: &str) {
     // let _ = std::fs::remove_dir_all(tmpdir);
 }
 
-/// 检查指定路径是否为挂载点（通过比较当前目录与父目录的 device id）
+/// 检查指定路径是否为挂载点（通过 mountpoint -q 命令）
 fn is_mountpoint(path: &str) -> bool {
-    match std::fs::metadata(path) {
-        Ok(meta) => {
-            let parent = std::path::Path::new(path)
-                .parent()
-                .unwrap_or(std::path::Path::new("/"));
-            match std::fs::metadata(parent) {
-                Ok(parent_meta) => meta.dev() != parent_meta.dev(),
-                Err(_) => false,
-            }
-        }
-        Err(_) => false,
-    }
+    std::process::Command::new("mountpoint")
+        .arg("-q")
+        .arg(path)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
