@@ -914,30 +914,6 @@ fn handle_create_zfs_share(req: CreateZfsShareRequest) -> Response {
     }
 }
 
-/// 检查指定的用户名是否存在于 Samba 用户列表中（通过 pdbedit -L）
-fn check_samba_user_exists(username: &str) -> Result<bool, String> {
-    let output = Command::new("pdbedit")
-        .args(["-L"])
-        .output();
-
-    match output {
-        Ok(result) => {
-            if result.status.success() {
-                let stdout = String::from_utf8_lossy(&result.stdout);
-                let exists = stdout.lines().any(|line| {
-                    let parts: Vec<&str> = line.split(':').collect();
-                    !parts.is_empty() && parts[0] == username
-                });
-                Ok(exists)
-            } else {
-                let stderr = String::from_utf8_lossy(&result.stderr);
-                Err(format!("pdbedit command failed: {}", stderr))
-            }
-        }
-        Err(e) => Err(format!("Failed to execute pdbedit: {}", e)),
-    }
-}
-
 
 fn handle_upgrade(req: UpgradeRequest) -> Response {
     let file = &req.file;
