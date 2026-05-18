@@ -956,7 +956,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
 
     // 1. 创建临时挂载目录并挂载 squashfs
     let mount_dir = format!(
-        "/tmp/zuti_helper_upgrade_mount_{}_{}",
+        "/tmp/zuti_update_{}_{}",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1059,7 +1059,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
 
     // 4. 创建临时目录 /mnt/xxx
     let tmpdir = format!(
-        "/mnt/zuti_helper_upgrade_{}_{}",
+        "/tmp/zuti_write_{}_{}",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1210,8 +1210,11 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
     }
 
     // 12. 卸载 mount_dir 并清理
+    let _ = Command::new("umount").arg(&tmpdir).output();
+    // let _ = std::fs::remove_dir_all(&tmpdir);
+
     let _ = Command::new("umount").arg(&mount_dir).output();
-    let _ = std::fs::remove_dir_all(&mount_dir);
+    // let _ = std::fs::remove_dir_all(&mount_dir);
 
     let resp_data = UpgradeResponse {
         success: true,
