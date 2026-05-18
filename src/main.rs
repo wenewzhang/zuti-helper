@@ -1110,7 +1110,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
 
     // 5. zfs create -o canmount=noauto -o mountpoint=/ <dataset>
     let zfs_create = Command::new("zfs")
-        .args(["create", "-o", "canmount=noauto", "-o", "mountpoint=/", &dataset_name])
+        .args(["create", "-o", "canmount=on", "-o", &format!("mountpoint={}",&tmpdir), &dataset_name])
         .output();
     match zfs_create {
         Ok(output) if output.status.success() => {}
