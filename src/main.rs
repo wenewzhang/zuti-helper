@@ -1196,6 +1196,37 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
         }
     }
 
+    // 11.5 重新设置 dataset mountpoint 为 /
+    let zfs_set_mp = Command::new("zfs")
+        .args(["set", "mountpoint=/", &dataset_name])
+        .output();
+    match zfs_set_mp {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            cleanup_upgrade(&mount_dir, &tmpdir);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!(
+                    "Failed to set mountpoint for '{}': {}",
+                    dataset_name, stderr
+                )),
+            };
+        }
+        Err(e) => {
+            cleanup_upgrade(&mount_dir, &tmpdir);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!(
+                    "Failed to execute zfs set mountpoint for '{}': {}",
+                    dataset_name, e
+                )),
+            };
+        }
+    }
+
     // 12. 卸载 mount_dir 并清理
     let _ = Command::new("umount").arg(&tmpdir).output();
     // let _ = std::fs::remove_dir_all(&tmpdir);
@@ -1220,10 +1251,10 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
 
 /// 清理 upgrade 过程中产生的临时资源（尽力而为）
 fn cleanup_upgrade(mount_dir: &str, tmpdir: &str) {
-    // let _ = Command::new("umount").arg(tmpdir).output();
+    let _ = Command::new("umount").arg(tmpdir).output();
     // let _ = Command::new("zfs").args(["umount", dataset_name]).output();
     // let _ = Command::new("zpool").args(["export", "-f", pool_name]).output();
-    // let _ = Command::new("umount").arg(mount_dir).output();
+    let _ = Command::new("umount").arg(mount_dir).output();
     // let _ = std::fs::remove_dir_all(mount_dir);
     // let _ = std::fs::remove_dir_all(tmpdir);
 }
