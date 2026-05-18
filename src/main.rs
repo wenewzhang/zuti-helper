@@ -1151,7 +1151,9 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
     }
 
     // 10. 检查 mountpoint
-    if !is_mountpoint(&tmpdir) {
+    let is_mp = is_mountpoint(&tmpdir);
+    log::info!("is_mountpoint('{}') = {}", tmpdir, is_mp);
+    if !is_mp {
         cleanup_upgrade(&mount_dir, &tmpdir);
         return Response {
             success: false,
