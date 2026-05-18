@@ -16,6 +16,11 @@ const POOL_NAME: &str = "one-pool";
 fn main() {
     logger::init_logger();
 
+    // 检查 unsquashfs 命令是否存在
+    if Command::new("unsquashfs").output().is_err() {
+        log::warn!("unsquashfs command not found, upgrade functionality may be unavailable");
+    }
+
     let socket_path = "/run/zuti-helper.sock";
 
     // 如果 socket 文件已存在，先删除
