@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -7,124 +6,10 @@ use std::collections::HashSet;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-// create_pool 请求结构体
-#[derive(Deserialize, Debug)]
-pub struct CreatePoolRequest {
-    pub pool_name: String,
-    pub pool_type: String, // single, strip, mirror, raidz1, raidz2, raidz3, raid10
-    pub devices: Vec<String>, // 如 ["sda", "nvme0n1", "sdb1"]
-}
+mod models;
+use models::*;
 
-// create_pool 响应结构体
-#[derive(Serialize, Debug)]
-pub struct CreatePoolResponse {
-    pub success: bool,
-    pub message: String,
-    pub error: Option<String>,
-}
-
-// export_pool 请求结构体
-#[derive(Deserialize, Debug)]
-pub struct ExportPoolRequest {
-    pub pool_name: String,
-}
-
-// export_pool 响应结构体
-#[derive(Serialize, Debug)]
-pub struct ExportPoolResponse {
-    pub success: bool,
-    pub message: String,
-    pub error: Option<String>,
-}
-
-// import_pool 请求结构体
-#[derive(Deserialize, Debug)]
-pub struct ImportPoolRequest {
-    pub pool_name: String,
-    pub mount_point: Option<String>,
-    pub boot_enabled: Option<bool>,
-}
-
-// import_pool 响应结构体
-#[derive(Serialize, Debug)]
-pub struct ImportPoolResponse {
-    pub success: bool,
-    pub message: String,
-    pub error: Option<String>,
-}
-
-// create_directory 请求结构体
-#[derive(Deserialize, Debug)]
-pub struct CreateDirectoryRequest {
-    pub directory: String,
-    pub owner: String,
-    pub arg: String, // 权限模式，如 "755"
-}
-
-// create_directory 响应结构体
-#[derive(Serialize, Debug)]
-pub struct CreateDirectoryResponse {
-    pub success: bool,
-    pub message: String,
-    pub error: Option<String>,
-}
-
-// create_zfs_share 请求结构体
-#[derive(Deserialize, Debug)]
-pub struct CreateZfsShareRequest {
-    pub share_name: String,
-    pub dataset_name: String,
-    pub quota: String,
-    pub samba_user: String,
-}
-
-// upgrade 请求结构体
-#[derive(Deserialize, Debug)]
-pub struct UpgradeRequest {
-    pub file: String,
-}
-
-// upgrade 响应结构体
-#[derive(Serialize, Debug)]
-pub struct UpgradeResponse {
-    pub success: bool,
-    pub message: String,
-    pub error: Option<String>,
-}
-
-// create_zfs_share 响应结构体
-#[derive(Serialize, Debug)]
-pub struct CreateZfsShareResponse {
-    pub success: bool,
-    pub message: String,
-    pub error: Option<String>,
-}
-
-// 通用请求包装
-#[derive(Deserialize, Debug)]
-#[serde(tag = "action")]
-pub enum Request {
-    #[serde(rename = "create_pool")]
-    CreatePool(CreatePoolRequest),
-    #[serde(rename = "export_pool")]
-    ExportPool(ExportPoolRequest),
-    #[serde(rename = "import_pool")]
-    ImportPool(ImportPoolRequest),
-    #[serde(rename = "create_directory")]
-    CreateDirectory(CreateDirectoryRequest),
-    #[serde(rename = "create_zfs_share")]
-    CreateZfsShare(CreateZfsShareRequest),
-    #[serde(rename = "upgrade")]
-    Upgrade(UpgradeRequest),
-}
-
-// 通用响应包装
-#[derive(Serialize, Debug)]
-pub struct Response {
-    pub success: bool,
-    pub data: Option<serde_json::Value>,
-    pub error: Option<String>,
-}
+const POOL_NAME: &str = "one-pool";
 
 fn main() {
     let socket_path = "/run/zuti-helper.sock";
@@ -411,7 +296,7 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
                 Response {
                     success: false,
                     data: None,
-                    error: Some(format!("Failed to import pool '{}': {}", pool_name, stderr)),
+                    error: Some(format!("Failed to import pool '{}': {}", POOL_NAME, stderr)),
                 }
             }
         }
@@ -457,7 +342,7 @@ fn handle_export_pool(req: ExportPoolRequest) -> Response {
                 Response {
                     success: false,
                     data: None,
-                    error: Some(format!("Failed to export pool '{}': {}", pool_name, stderr)),
+                    error: Some(format!("Failed to export pool '{}': {}", POOL_NAME, stderr)),
                 }
             }
         }
@@ -1159,8 +1044,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
         }
     };
 
-    let pool_name = "one-pool";
-    let dataset_name = format!("{}/ROOT/{}", pool_name, version);
+    let dataset_name = format!("{}/ROOT/{}", POOL_NAME, version);
 
     // 3. udevadm trigger
     if let Err(e) = Command::new("udevadm").arg("trigger").output() {
@@ -1232,7 +1116,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
         Ok(output) if output.status.success() => {}
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, POOL_NAME);
             return Response {
                 success: false,
                 data: None,
@@ -1243,7 +1127,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
             };
         }
         Err(e) => {
-            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, POOL_NAME);
             return Response {
                 success: false,
                 data: None,
@@ -1257,13 +1141,13 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
 
     // 6. zpool set bootfs=<dataset> <pool>
     let zpool_set = Command::new("zpool")
-        .args(["set", &format!("bootfs={}", dataset_name), pool_name])
+        .args(["set", &format!("bootfs={}", dataset_name), POOL_NAME])
         .output();
     match zpool_set {
         Ok(output) if output.status.success() => {}
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, POOL_NAME);
             return Response {
                 success: false,
                 data: None,
@@ -1274,7 +1158,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
             };
         }
         Err(e) => {
-            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, POOL_NAME);
             return Response {
                 success: false,
                 data: None,
@@ -1288,27 +1172,27 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
 
     // 7. zpool export -f <pool>
     let zpool_export = Command::new("zpool")
-        .args(["export", "-f", pool_name])
+        .args(["export", "-f", POOL_NAME])
         .output();
     match zpool_export {
         Ok(output) if output.status.success() => {}
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, POOL_NAME);
             return Response {
                 success: false,
                 data: None,
-                error: Some(format!("Failed to export pool '{}': {}", pool_name, stderr)),
+                error: Some(format!("Failed to export pool '{}': {}", POOL_NAME, stderr)),
             };
         }
         Err(e) => {
-            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, POOL_NAME);
             return Response {
                 success: false,
                 data: None,
                 error: Some(format!(
                     "Failed to execute zpool export for '{}': {}",
-                    pool_name, e
+                    POOL_NAME, e
                 )),
             };
         }
@@ -1316,27 +1200,27 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
 
     // 8. zpool import -f -R <tmpdir> <pool>
     let zpool_import = Command::new("zpool")
-        .args(["import", "-f", "-R", &tmpdir, pool_name])
+        .args(["import", "-f", "-R", &tmpdir, POOL_NAME])
         .output();
     match zpool_import {
         Ok(output) if output.status.success() => {}
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, POOL_NAME);
             return Response {
                 success: false,
                 data: None,
-                error: Some(format!("Failed to import pool '{}': {}", pool_name, stderr)),
+                error: Some(format!("Failed to import pool '{}': {}", POOL_NAME, stderr)),
             };
         }
         Err(e) => {
-            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, POOL_NAME);
             return Response {
                 success: false,
                 data: None,
                 error: Some(format!(
                     "Failed to execute zpool import for '{}': {}",
-                    pool_name, e
+                    POOL_NAME, e
                 )),
             };
         }
@@ -1350,7 +1234,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
         Ok(output) if output.status.success() => {}
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, POOL_NAME);
             return Response {
                 success: false,
                 data: None,
@@ -1361,7 +1245,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
             };
         }
         Err(e) => {
-            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, POOL_NAME);
             return Response {
                 success: false,
                 data: None,
@@ -1375,7 +1259,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
 
     // 10. 检查 mountpoint
     if !is_mountpoint(&tmpdir) {
-        cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+        cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, POOL_NAME);
         return Response {
             success: false,
             data: None,
@@ -1392,7 +1276,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
         Ok(output) if output.status.success() => {}
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, POOL_NAME);
             return Response {
                 success: false,
                 data: None,
@@ -1400,7 +1284,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
             };
         }
         Err(e) => {
-            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, pool_name);
+            cleanup_upgrade(&mount_dir, &tmpdir, &dataset_name, POOL_NAME);
             return Response {
                 success: false,
                 data: None,
