@@ -85,6 +85,17 @@ pub struct UpgradeResponse {
     pub error: Option<String>,
 }
 
+// upgrading_progress 请求结构体
+#[derive(Deserialize, Debug)]
+pub struct UpgradingProgressRequest {}
+
+// upgrading_progress 响应结构体
+#[derive(Serialize, Debug)]
+pub struct UpgradingProgressResponse {
+    pub state: String, // "nope" 或 "upgrade"
+    pub progress: u8,  // 0-100，当 state 为 "nope" 时为 0
+}
+
 // create_zfs_share 响应结构体
 #[derive(Serialize, Debug)]
 pub struct CreateZfsShareResponse {
@@ -109,6 +120,8 @@ pub enum Request {
     CreateZfsShare(CreateZfsShareRequest),
     #[serde(rename = "upgrade")]
     Upgrade(UpgradeRequest),
+    #[serde(rename = "upgrading_progress")]
+    UpgradingProgress(UpgradingProgressRequest),
 }
 
 // 通用响应包装

@@ -4,12 +4,31 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::collections::HashSet;
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod models;
 mod config;
 use models::*;
 use config::logger;
+
+#[derive(Debug, Clone)]
+pub enum UpgradeProgressState {
+    Nope,
+    Upgrade(u8),
+}
+
+static UPGRADE_PROGRESS: OnceLock<Mutex<UpgradeProgressState>> = OnceLock::new();
+
+fn get_upgrade_progress() -> &'static Mutex<UpgradeProgressState> {
+    UPGRADE_PROGRESS.get_or_init(|| Mutex::new(UpgradeProgressState::Nope))
+}
+
+fn set_upgrade_progress(state: UpgradeProgressState) {
+    if let Ok(mut guard) = get_upgrade_progress().lock() {
+        *guard = state;
+    }
+}
 
 const POOL_NAME: &str = "one-pool";
 
@@ -96,6 +115,7 @@ fn handle_connection(mut stream: UnixStream) {
             Request::CreateDirectory(req) => handle_create_directory(req),
             Request::CreateZfsShare(req) => handle_create_zfs_share(req),
             Request::Upgrade(req) => handle_upgrade(req),
+            Request::UpgradingProgress(req) => handle_upgrading_progress(req),
         };
 
         if !send_response(&mut stream, &resp) {
@@ -920,6 +940,26 @@ fn handle_create_zfs_share(req: CreateZfsShareRequest) -> Response {
 }
 
 
+fn handle_upgrading_progress(_req: UpgradingProgressRequest) -> Response {
+    let (state_str, progress) = match get_upgrade_progress().lock() {
+        Ok(guard) => match *guard {
+            UpgradeProgressState::Nope => ("nope".to_string(), 0u8),
+            UpgradeProgressState::Upgrade(p) => ("upgrade".to_string(), p),
+        },
+        Err(_) => ("nope".to_string(), 0u8),
+    };
+
+    let resp_data = UpgradingProgressResponse {
+        state: state_str,
+        progress,
+    };
+    Response {
+        success: true,
+        data: serde_json::to_value(resp_data).ok(),
+        error: None,
+    }
+}
+
 fn handle_upgrade(req: UpgradeRequest) -> Response {
     let file = &req.file;
 
@@ -938,6 +978,8 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
             error: Some(format!("File '{}' does not exist", file)),
         };
     }
+
+    set_upgrade_progress(UpgradeProgressState::Upgrade(5));
 
     // 1. 创建临时挂载目录并挂载 squashfs
     let mount_dir = format!(
@@ -963,6 +1005,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
         Ok(output) if output.status.success() => {}
         Ok(output) => {
             let _ = std::fs::remove_dir_all(&mount_dir);
+            set_upgrade_progress(UpgradeProgressState::Nope);
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Response {
                 success: false,
@@ -972,6 +1015,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
         }
         Err(e) => {
             let _ = std::fs::remove_dir_all(&mount_dir);
+            set_upgrade_progress(UpgradeProgressState::Nope);
             return Response {
                 success: false,
                 data: None,
@@ -979,6 +1023,8 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
             };
         }
     }
+
+    set_upgrade_progress(UpgradeProgressState::Upgrade(10));
 
     // 2. 读取 manifest.json
     let manifest_path = format!("{}/manifest.json", mount_dir);
@@ -1009,6 +1055,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
         Err(e) => {
             let _ = Command::new("umount").arg(&mount_dir).output();
             let _ = std::fs::remove_dir_all(&mount_dir);
+            set_upgrade_progress(UpgradeProgressState::Nope);
             return Response {
                 success: false,
                 data: None,
@@ -1021,6 +1068,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
         None => {
             let _ = Command::new("umount").arg(&mount_dir).output();
             let _ = std::fs::remove_dir_all(&mount_dir);
+            set_upgrade_progress(UpgradeProgressState::Nope);
             return Response {
                 success: false,
                 data: None,
@@ -1028,6 +1076,8 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
             };
         }
     };
+
+    set_upgrade_progress(UpgradeProgressState::Upgrade(20));
 
     let dataset_name = format!("{}/ROOT/{}", POOL_NAME, version);
 
@@ -1054,12 +1104,15 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
     if let Err(e) = std::fs::create_dir_all(&tmpdir) {
         let _ = Command::new("umount").arg(&mount_dir).output();
         let _ = std::fs::remove_dir_all(&mount_dir);
+        set_upgrade_progress(UpgradeProgressState::Nope);
         return Response {
             success: false,
             data: None,
             error: Some(format!("Failed to create tmpdir '{}': {}", tmpdir, e)),
         };
     }
+
+    set_upgrade_progress(UpgradeProgressState::Upgrade(30));
 
     // 4.5 检查 dataset 是否已存在,如存在则生成新名称
     let dataset_name = if let Ok(output) = Command::new("zfs")
@@ -1102,6 +1155,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
             cleanup_upgrade(&mount_dir, &tmpdir);
+            set_upgrade_progress(UpgradeProgressState::Nope);
             return Response {
                 success: false,
                 data: None,
@@ -1113,6 +1167,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
         }
         Err(e) => {
             cleanup_upgrade(&mount_dir, &tmpdir);
+            set_upgrade_progress(UpgradeProgressState::Nope);
             return Response {
                 success: false,
                 data: None,
@@ -1124,36 +1179,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
         }
     }
 
-    // 6. zpool set bootfs=<dataset> <pool>
-    let zpool_set = Command::new("zpool")
-        .args(["set", &format!("bootfs={}", dataset_name), POOL_NAME])
-        .output();
-    match zpool_set {
-        Ok(output) if output.status.success() => {}
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            cleanup_upgrade(&mount_dir, &tmpdir);
-            return Response {
-                success: false,
-                data: None,
-                error: Some(format!(
-                    "Failed to set bootfs for '{}': {}",
-                    dataset_name, stderr
-                )),
-            };
-        }
-        Err(e) => {
-            cleanup_upgrade(&mount_dir, &tmpdir);
-            return Response {
-                success: false,
-                data: None,
-                error: Some(format!(
-                    "Failed to execute zpool set bootfs for '{}': {}",
-                    dataset_name, e
-                )),
-            };
-        }
-    }
+    set_upgrade_progress(UpgradeProgressState::Upgrade(40));
 
     // 10. 检查 mountpoint
     let is_mp = is_mountpoint(&tmpdir);
@@ -1177,6 +1203,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
         Ok(child) => child,
         Err(e) => {
             cleanup_upgrade(&mount_dir, &tmpdir);
+            set_upgrade_progress(UpgradeProgressState::Nope);
             return Response {
                 success: false,
                 data: None,
@@ -1188,6 +1215,8 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
         }
     };
 
+    set_upgrade_progress(UpgradeProgressState::Upgrade(60));
+
     let dataset_name_clone = dataset_name.clone();
     let mount_dir_clone = mount_dir.clone();
     let tmpdir_clone = tmpdir.clone();
@@ -1195,6 +1224,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
         match child.wait() {
             Ok(status) if status.success() => {
                 log::info!("unsquashfs completed successfully for dataset '{}'", dataset_name_clone);
+                set_upgrade_progress(UpgradeProgressState::Upgrade(80));
 
                 // 配置 chroot 环境
                 let run = |desc: &str, prog: &str, args: &[&str]| {
@@ -1227,6 +1257,8 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
                 run("mount proc", "mount", &["-t", "proc", "proc", &format!("{}/proc", t)]);
                 run("mount sysfs", "mount", &["-t", "sysfs", "sys", &format!("{}/sys", t)]);
                 run("mount dev", "mount", &["--bind", "/dev", &format!("{}/dev", t)]);
+
+                set_upgrade_progress(UpgradeProgressState::Upgrade(85));
 
                 let hostname = "onenas";
                 run("set hostname", "sh", &["-c", &format!("echo '{}' > {}/etc/hostname", hostname, t)]);
@@ -1280,6 +1312,8 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
                 run("disable networking", "chroot", &[t, "systemctl", "disable", "networking"]);
                 run("enable podman", "chroot", &[t, "systemctl", "enable", "podman"]);
                 run("enable nginx", "chroot", &[t, "systemctl", "enable", "nginx"]);
+
+                set_upgrade_progress(UpgradeProgressState::Upgrade(90));
 
                 run("update-initramfs", "chroot", &[t, "update-initramfs", "-c", "-k", "all"]);
                 run("zfs set commandline", "chroot", &[t, "zfs", "set", "org.zfsbootmenu:commandline=\"loglevel=7\"", &format!("{}/ROOT", POOL_NAME)]);
@@ -1344,20 +1378,44 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
                     Err(e) => {
                         log::error!("Failed to execute zfs set mountpoint for '{}': {}", dataset_name_clone, e);
                     }
-                }                
+                }
+
+
+    // 6. zpool set bootfs=<dataset> <pool>
+                let zpool_set = Command::new("zpool")
+                .args(["set", &format!("bootfs={}", dataset_name_clone), POOL_NAME])
+                .output();
+
+                match zpool_set {
+                        Ok(output) if output.status.success() => {}
+                        Ok(output) => {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            log::error!("Failed to set bootfs for '{}': {}", dataset_name_clone, stderr);
+                        }
+                        Err(e) => {
+                            log::error!("Failed to set bootfs for '{}': {}", dataset_name_clone, e);
+                        }                            
+                }
+              
+                set_upgrade_progress(UpgradeProgressState::Upgrade(100));
+
+                
                 // 12. 卸载 mount_dir 并清理
                 let _ = Command::new("umount").arg(&tmpdir_clone).output();
                 let _ = Command::new("umount").arg(&mount_dir_clone).output();
+                // set_upgrade_progress(UpgradeProgressState::Nope);
             }
             Ok(status) => {
                 log::error!("unsquashfs exited with non-zero status for dataset '{}': {:?}", dataset_name_clone, status.code());
                 let _ = Command::new("umount").arg(&tmpdir_clone).output();
                 let _ = Command::new("umount").arg(&mount_dir_clone).output();
+                set_upgrade_progress(UpgradeProgressState::Nope);
             }
             Err(e) => {
                 log::error!("Failed to wait for unsquashfs process for dataset '{}': {}", dataset_name_clone, e);
                 let _ = Command::new("umount").arg(&tmpdir_clone).output();
                 let _ = Command::new("umount").arg(&mount_dir_clone).output();
+                set_upgrade_progress(UpgradeProgressState::Nope);
             }
         }
     });
