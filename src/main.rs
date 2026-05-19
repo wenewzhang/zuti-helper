@@ -1342,7 +1342,9 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
                         log::error!("Failed to execute zfs set mountpoint for '{}': {}", dataset_name_clone, e);
                     }
                 }
-
+                run("umount proc", "umount", &[&format!("{}/proc", t)]);
+                run("umount sysfs", "umount", &[&format!("{}/sys", t)]);
+                run("umount dev", "umount", &[&format!("{}/dev", t)]);
                 // 12. 卸载 mount_dir 并清理
                 let _ = Command::new("umount").arg(&tmpdir_clone).output();
                 let _ = Command::new("umount").arg(&mount_dir_clone).output();
