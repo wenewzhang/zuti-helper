@@ -1328,6 +1328,9 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
                 }
                 run("ssh-keygen", "chroot", &[t, "ssh-keygen", "-A"]);
 
+                run("umount proc", "umount", &[&format!("{}/proc", t)]);
+                run("umount sysfs", "umount", &[&format!("{}/sys", t)]);
+                run("umount dev", "umount", &[&format!("{}/dev", t)]);
                 // 11.5 重新设置 dataset mountpoint 为 /
                 let zfs_set_mp = Command::new("zfs")
                     .args(["set", "mountpoint=/", &dataset_name_clone])
@@ -1341,10 +1344,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
                     Err(e) => {
                         log::error!("Failed to execute zfs set mountpoint for '{}': {}", dataset_name_clone, e);
                     }
-                }
-                run("umount proc", "umount", &[&format!("{}/proc", t)]);
-                run("umount sysfs", "umount", &[&format!("{}/sys", t)]);
-                run("umount dev", "umount", &[&format!("{}/dev", t)]);
+                }                
                 // 12. 卸载 mount_dir 并清理
                 let _ = Command::new("umount").arg(&tmpdir_clone).output();
                 let _ = Command::new("umount").arg(&mount_dir_clone).output();
