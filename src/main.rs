@@ -1196,6 +1196,138 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
             Ok(status) if status.success() => {
                 log::info!("unsquashfs completed successfully for dataset '{}'", dataset_name_clone);
 
+                // 配置 chroot 环境
+                let run = |desc: &str, prog: &str, args: &[&str]| {
+                    let cmd_str = format!("{} {}", prog, args.join(" "));
+                    log::info!("Executing [{}]: {}", desc, cmd_str);
+                    match Command::new(prog).args(args).output() {
+                        Ok(output) if output.status.success() => {
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            if !stdout.trim().is_empty() {
+                                log::info!("[{}] stdout: {}", desc, stdout.trim());
+                            }
+                        }
+                        Ok(output) => {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            log::warn!("[{}] failed (exit code: {:?}): stderr: {} stdout: {}", desc, output.status.code(), stderr.trim(), stdout.trim());
+                        }
+                        Err(e) => {
+                            log::warn!("[{}] failed to execute: {}", desc, e);
+                        }
+                    }
+                };
+
+                let t = &tmpdir_clone;
+                run("chmod dpkg", "chmod", &["+x", &format!("{}/usr/bin/dpkg", t)]);
+                run("chmod apt", "chmod", &["+x", &format!("{}/usr/bin/apt", t)]);
+                run("chmod apt-get", "chmod", &["+x", &format!("{}/usr/bin/apt-get", t)]);
+
+                run("mkdir proc/sys/dev", "mkdir", &["-p", &format!("{}/proc", t), &format!("{}/sys", t), &format!("{}/dev", t)]);
+                run("mount proc", "mount", &["-t", "proc", "proc", &format!("{}/proc", t)]);
+                run("mount sysfs", "mount", &["-t", "sysfs", "sys", &format!("{}/sys", t)]);
+                run("mount dev", "mount", &["--bind", "/dev", &format!("{}/dev", t)]);
+
+                let hostname = "onenas";
+                run("set hostname", "sh", &["-c", &format!("echo '{}' > {}/etc/hostname", hostname, t)]);
+                run("set hosts", "sh", &["-c", &format!("echo -e '127.0.1.1\\t{}' >> {}/etc/hosts", hostname, t)]);
+
+                // 复制系统 apt sources 到 chroot 环境
+                let src_list = "/etc/apt/sources.list";
+                let dst_list = format!("{}/etc/apt/sources.list", t);
+                if std::path::Path::new(src_list).exists() {
+                    if let Err(e) = std::fs::copy(src_list, &dst_list) {
+                        log::warn!("Failed to copy {} to {}: {}", src_list, dst_list, e);
+                    } else {
+                        log::info!("Copied {} -> {}", src_list, dst_list);
+                    }
+                }
+                let src_list_d = "/etc/apt/sources.list.d";
+                let dst_list_d = format!("{}/etc/apt/sources.list.d", t);
+                if let Ok(entries) = std::fs::read_dir(src_list_d) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_file() {
+                            let dst_file = format!("{}/{}", dst_list_d, path.file_name().unwrap_or_default().to_string_lossy());
+                            if let Err(e) = std::fs::copy(&path, &dst_file) {
+                                log::warn!("Failed to copy {:?} to {}: {}", path, dst_file, e);
+                            } else {
+                                log::info!("Copied {:?} -> {}", path, dst_file);
+                            }
+                        }
+                    }
+                }
+
+                // 复制宿主系统 /etc/fstab 到目标系统
+                let src_fstab = "/etc/fstab";
+                let dst_fstab = format!("{}/etc/fstab", t);
+                if std::path::Path::new(src_fstab).exists() {
+                    if let Err(e) = std::fs::copy(src_fstab, &dst_fstab) {
+                        log::warn!("Failed to copy {} to {}: {}", src_fstab, dst_fstab, e);
+                    } else {
+                        log::info!("Copied {} -> {}", src_fstab, dst_fstab);
+                    }
+                }
+
+                run("dkms zfs.conf", "sh", &["-c", &format!("echo 'REMAKE_INITRD=yes' > {}/etc/dkms/zfs.conf", t)]);
+
+                run("enable zfs.target", "chroot", &[t, "systemctl", "enable", "zfs.target"]);
+                run("enable zfs-import-cache", "chroot", &[t, "systemctl", "enable", "zfs-import-cache"]);
+                run("enable zfs-mount", "chroot", &[t, "systemctl", "enable", "zfs-mount"]);
+                run("enable zfs-import.target", "chroot", &[t, "systemctl", "enable", "zfs-import.target"]);
+                run("enable systemd-resolved", "chroot", &[t, "systemctl", "enable", "systemd-resolved"]);
+                run("enable systemd-networkd", "chroot", &[t, "systemctl", "enable", "systemd-networkd"]);
+                run("disable networking", "chroot", &[t, "systemctl", "disable", "networking"]);
+                run("enable podman", "chroot", &[t, "systemctl", "enable", "podman"]);
+                run("enable nginx", "chroot", &[t, "systemctl", "enable", "nginx"]);
+
+                run("update-initramfs", "chroot", &[t, "update-initramfs", "-c", "-k", "all"]);
+                run("zfs set commandline", "chroot", &[t, "zfs", "set", "org.zfsbootmenu:commandline=\"loglevel=7\"", &format!("{}/ROOT", POOL_NAME)]);
+
+                // 从宿主系统 /etc/shadow 获取 root 密码 hash 并写入目标系统
+                let root_shadow_line = match Command::new("grep").args(["^root:", "/etc/shadow"]).output() {
+                    Ok(output) if output.status.success() => {
+                        String::from_utf8_lossy(&output.stdout).trim().to_string()
+                    }
+                    Ok(output) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        log::warn!("grep root shadow failed: {}", stderr);
+                        String::new()
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to execute grep root shadow: {}", e);
+                        String::new()
+                    }
+                };
+
+                if !root_shadow_line.is_empty() {
+                    let target_shadow = format!("{}/etc/shadow", t);
+                    let mut shadow_content = String::new();
+                    if std::path::Path::new(&target_shadow).exists() {
+                        if let Ok(content) = std::fs::read_to_string(&target_shadow) {
+                            shadow_content = content;
+                        }
+                    }
+                    let mut lines: Vec<String> = shadow_content.lines().map(|s| s.to_string()).collect();
+                    let mut found = false;
+                    for line in &mut lines {
+                        if line.starts_with("root:") {
+                            *line = root_shadow_line.clone();
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        lines.push(root_shadow_line);
+                    }
+                    if let Err(e) = std::fs::write(&target_shadow, lines.join("\n") + "\n") {
+                        log::warn!("Failed to write {}: {}", target_shadow, e);
+                    } else {
+                        log::info!("Updated root password in {}", target_shadow);
+                    }
+                }
+                run("ssh-keygen", "chroot", &[t, "ssh-keygen", "-A"]);
+
                 // 11.5 重新设置 dataset mountpoint 为 /
                 let zfs_set_mp = Command::new("zfs")
                     .args(["set", "mountpoint=/", &dataset_name_clone])
