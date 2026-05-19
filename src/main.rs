@@ -1168,21 +1168,13 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
     }
 
     // 11. unsquashfs -d <tmpdir> -f -da 16 -fr 16 <mount_dir>/rootfs.squashfs
+    // 改为后台任务执行，即时返回响应
     let rootfs_path = format!("{}/rootfs.squashfs", mount_dir);
-    let unsquashfs = Command::new("unsquashfs")
+    let mut child = match Command::new("unsquashfs")
         .args(["-d", &tmpdir, "-f", "-da", "16", "-fr", "16", &rootfs_path])
-        .output();
-    match unsquashfs {
-        Ok(output) if output.status.success() => {}
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            cleanup_upgrade(&mount_dir, &tmpdir);
-            return Response {
-                success: false,
-                data: None,
-                error: Some(format!("Failed to unsquashfs '{}': {}", rootfs_path, stderr)),
-            };
-        }
+        .spawn()
+    {
+        Ok(child) => child,
         Err(e) => {
             cleanup_upgrade(&mount_dir, &tmpdir);
             return Response {
@@ -1194,50 +1186,52 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
                 )),
             };
         }
-    }
+    };
 
-    // 11.5 重新设置 dataset mountpoint 为 /
-    let zfs_set_mp = Command::new("zfs")
-        .args(["set", "mountpoint=/", &dataset_name])
-        .output();
-    match zfs_set_mp {
-        Ok(output) if output.status.success() => {}
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            cleanup_upgrade(&mount_dir, &tmpdir);
-            return Response {
-                success: false,
-                data: None,
-                error: Some(format!(
-                    "Failed to set mountpoint for '{}': {}",
-                    dataset_name, stderr
-                )),
-            };
+    let dataset_name_clone = dataset_name.clone();
+    let mount_dir_clone = mount_dir.clone();
+    let tmpdir_clone = tmpdir.clone();
+    std::thread::spawn(move || {
+        match child.wait() {
+            Ok(status) if status.success() => {
+                log::info!("unsquashfs completed successfully for dataset '{}'", dataset_name_clone);
+
+                // 11.5 重新设置 dataset mountpoint 为 /
+                let zfs_set_mp = Command::new("zfs")
+                    .args(["set", "mountpoint=/", &dataset_name_clone])
+                    .output();
+                match zfs_set_mp {
+                    Ok(output) if output.status.success() => {}
+                    Ok(output) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        log::error!("Failed to set mountpoint for '{}': {}", dataset_name_clone, stderr);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to execute zfs set mountpoint for '{}': {}", dataset_name_clone, e);
+                    }
+                }
+
+                // 12. 卸载 mount_dir 并清理
+                let _ = Command::new("umount").arg(&tmpdir_clone).output();
+                let _ = Command::new("umount").arg(&mount_dir_clone).output();
+            }
+            Ok(status) => {
+                log::error!("unsquashfs exited with non-zero status for dataset '{}': {:?}", dataset_name_clone, status.code());
+                let _ = Command::new("umount").arg(&tmpdir_clone).output();
+                let _ = Command::new("umount").arg(&mount_dir_clone).output();
+            }
+            Err(e) => {
+                log::error!("Failed to wait for unsquashfs process for dataset '{}': {}", dataset_name_clone, e);
+                let _ = Command::new("umount").arg(&tmpdir_clone).output();
+                let _ = Command::new("umount").arg(&mount_dir_clone).output();
+            }
         }
-        Err(e) => {
-            cleanup_upgrade(&mount_dir, &tmpdir);
-            return Response {
-                success: false,
-                data: None,
-                error: Some(format!(
-                    "Failed to execute zfs set mountpoint for '{}': {}",
-                    dataset_name, e
-                )),
-            };
-        }
-    }
-
-    // 12. 卸载 mount_dir 并清理
-    let _ = Command::new("umount").arg(&tmpdir).output();
-    // let _ = std::fs::remove_dir_all(&tmpdir);
-
-    let _ = Command::new("umount").arg(&mount_dir).output();
-    // let _ = std::fs::remove_dir_all(&mount_dir);
+    });
 
     let resp_data = UpgradeResponse {
         success: true,
         message: format!(
-            "Upgrade successful: dataset '{}' created and rootfs extracted",
+            "Upgrade started: dataset '{}' created, rootfs extraction running in background",
             dataset_name
         ),
         error: None,
