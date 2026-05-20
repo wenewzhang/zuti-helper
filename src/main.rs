@@ -1366,8 +1366,21 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
                 run("umount sysfs", "umount", &[&format!("{}/sys", t)]);
                 run("umount dev", "umount", &[&format!("{}/dev", t)]);
                 // 11.5 重新设置 dataset mountpoint 为 /
+                let zfs_set_canmount = Command::new("zfs")
+                    .args(["set", "canmount=noauto", &dataset_name_clone])
+                    .output();
+                match zfs_set_canmount {
+                    Ok(output) if output.status.success() => {}
+                    Ok(output) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        log::error!("Failed to set canmount=noauto for '{}': {}", dataset_name_clone, stderr);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to execute zfs set canmount=noauto for '{}': {}", dataset_name_clone, e);
+                    }
+                }
                 let zfs_set_mp = Command::new("zfs")
-                    .args(["set", "mountpoint=/", &dataset_name_clone])
+                    .args(["set", "-u", "mountpoint=/", &dataset_name_clone])
                     .output();
                 match zfs_set_mp {
                     Ok(output) if output.status.success() => {}
