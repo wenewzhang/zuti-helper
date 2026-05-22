@@ -131,7 +131,7 @@ fn main() {
         {
             Ok(output) if output.status.success() => {
                 let bak_src = format!("{}.bak", SAMBA_PASSDB_PATH);
-                let bak_dest = format!("{}{}.bak", target_dir, SAMBA_PASSDB_PATH);
+                let bak_dest = format!("{}{}", target_dir, SAMBA_PASSDB_PATH);
 
                 if let Some(parent) = Path::new(&bak_dest).parent() {
                     if let Err(e) = fs::create_dir_all(parent) {
