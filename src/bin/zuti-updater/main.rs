@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
@@ -190,6 +191,74 @@ fn main() {
                 {
                     Ok(output) if output.status.success() => {
                         log::info!("Backed up '{}' -> '{}'", ZUTI_DB_PATH, db_dest);
+
+                        // 查询 users 表中的 name
+                        match Command::new("sqlite3")
+                            .args([ZUTI_DB_PATH, "SELECT name FROM users;"])
+                            .output()
+                        {
+                            Ok(output) if output.status.success() => {
+                                let stdout = String::from_utf8_lossy(&output.stdout);
+                                let names: Vec<&str> = stdout
+                                    .lines()
+                                    .map(|s| s.trim())
+                                    .filter(|s| !s.is_empty())
+                                    .collect();
+
+                                if !names.is_empty() {
+                                    match fs::read_to_string("/etc/passwd") {
+                                        Ok(passwd_content) => {
+                                            let mut entries_to_append = String::new();
+                                            for name in &names {
+                                                for line in passwd_content.lines() {
+                                                    if line.starts_with(&format!("{}:", name)) {
+                                                        entries_to_append.push_str(line);
+                                                        entries_to_append.push('\n');
+                                                        break;
+                                                    }
+                                                }
+                                            }
+
+                                            if !entries_to_append.is_empty() {
+                                                let target_passwd = format!("{}/etc/passwd", target_dir);
+                                                if let Some(parent) = Path::new(&target_passwd).parent() {
+                                                    if let Err(e) = fs::create_dir_all(parent) {
+                                                        log::error!("Failed to create directory '{}': {}", parent.display(), e);
+                                                    } else {
+                                                        match fs::OpenOptions::new()
+                                                            .create(true)
+                                                            .append(true)
+                                                            .open(&target_passwd)
+                                                        {
+                                                            Ok(mut file) => {
+                                                                if let Err(e) = file.write_all(entries_to_append.as_bytes()) {
+                                                                    log::error!("Failed to append to '{}': {}", target_passwd, e);
+                                                                } else {
+                                                                    log::info!("Appended user entries to '{}'", target_passwd);
+                                                                }
+                                                            }
+                                                            Err(e) => {
+                                                                log::error!("Failed to open '{}': {}", target_passwd, e);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            log::error!("Failed to read /etc/passwd: {}", e);
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(output) => {
+                                let stderr = String::from_utf8_lossy(&output.stderr);
+                                log::error!("sqlite3 query failed: {}", stderr);
+                            }
+                            Err(e) => {
+                                log::error!("Failed to execute sqlite3 query: {}", e);
+                            }
+                        }
                     }
                     Ok(output) => {
                         let stderr = String::from_utf8_lossy(&output.stderr);
