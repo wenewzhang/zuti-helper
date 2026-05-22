@@ -1410,14 +1410,18 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
                         }                            
                 }
               
-                // 调用新系统中的 zuti-updater
+                // 调用新系统中的 zuti-updater，等待执行完成后再继续
                 let updater_path = format!("{}/usr/bin/zuti-updater", tmpdir_clone);
-                match Command::new(&updater_path).spawn() {
-                    Ok(child) => {
-                        log::info!("Started zuti-updater from '{}' with PID {}", updater_path, child.id());
+                match Command::new(&updater_path).output() {
+                    Ok(output) if output.status.success() => {
+                        log::info!("zuti-updater executed successfully");
+                    }
+                    Ok(output) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        log::error!("zuti-updater exited with error: {}", stderr);
                     }
                     Err(e) => {
-                        log::error!("Failed to start zuti-updater from '{}': {}", updater_path, e);
+                        log::error!("Failed to execute zuti-updater from '{}': {}", updater_path, e);
                     }
                 }
 
