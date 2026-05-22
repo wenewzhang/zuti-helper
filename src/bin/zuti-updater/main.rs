@@ -5,6 +5,80 @@ use std::process::Command;
 use zuti_helper::config::consts::{SAMBA_PASSDB_PATH, UPGRADE_FILES, ZUTI_DB_PATH};
 use zuti_helper::config::logger::init_logger_for;
 
+fn copy_entry(src: &Path, dest: &Path) {
+    if let Some(parent) = dest.parent() {
+        if let Err(e) = fs::create_dir_all(parent) {
+            log::error!("Failed to create directory '{}': {}", parent.display(), e);
+            return;
+        }
+    }
+
+    match fs::copy(src, dest) {
+        Ok(bytes) => {
+            if let Ok(metadata) = fs::metadata(src) {
+                let permissions = metadata.permissions();
+                if let Err(e) = fs::set_permissions(dest, permissions) {
+                    log::warn!(
+                        "Failed to preserve permissions for '{}': {}",
+                        dest.display(),
+                        e
+                    );
+                }
+            }
+            log::info!(
+                "Copied '{}' -> '{}' ({} bytes)",
+                src.display(),
+                dest.display(),
+                bytes
+            );
+        }
+        Err(e) => {
+            log::error!(
+                "Failed to copy '{}' -> '{}': {}",
+                src.display(),
+                dest.display(),
+                e
+            );
+        }
+    }
+}
+
+fn copy_directory(src_dir: &Path, dest_base: &Path) {
+    let entries = match fs::read_dir(src_dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            log::error!("Failed to read directory '{}': {}", src_dir.display(), e);
+            return;
+        }
+    };
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                log::error!("Failed to read entry in '{}': {}", src_dir.display(), e);
+                continue;
+            }
+        };
+
+        let src_path = entry.path();
+        let relative = match src_path.strip_prefix(src_dir) {
+            Ok(r) => r,
+            Err(e) => {
+                log::error!("Failed to get relative path for '{}': {}", src_path.display(), e);
+                continue;
+            }
+        };
+        let dest_path = dest_base.join(relative);
+
+        if src_path.is_dir() {
+            copy_directory(&src_path, &dest_path);
+        } else {
+            copy_entry(&src_path, &dest_path);
+        }
+    }
+}
+
 fn main() {
     init_logger_for("zuti-updater");
     log::info!("zuti-updater started");
@@ -41,34 +115,10 @@ fn main() {
         let dest_path = format!("{}{}", target_dir, src_path);
         let dest = Path::new(&dest_path);
 
-        if let Some(parent) = dest.parent() {
-            if let Err(e) = fs::create_dir_all(parent) {
-                log::error!(
-                    "Failed to create directory '{}': {}",
-                    parent.display(),
-                    e
-                );
-                continue;
-            }
-        }
-
-        match fs::copy(src, dest) {
-            Ok(bytes) => {
-                log::info!(
-                    "Copied '{}' -> '{}' ({} bytes)",
-                    src_path,
-                    dest_path,
-                    bytes
-                );
-            }
-            Err(e) => {
-                log::error!(
-                    "Failed to copy '{}' -> '{}': {}",
-                    src_path,
-                    dest_path,
-                    e
-                );
-            }
+        if src.is_dir() {
+            copy_directory(src, dest);
+        } else {
+            copy_entry(src, dest);
         }
     }
 
