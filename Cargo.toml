@@ -22,5 +22,6 @@ section = "admin"
 priority = "optional"
 assets = [
     ["target/release/zuti-helper", "usr/bin/zuti-helper", "4755"],
+    ["target/release/zuti-updater", "usr/bin/zuti-updater", "755"],
 ]
 depends = "libc6"

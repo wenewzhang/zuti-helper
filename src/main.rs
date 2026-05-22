@@ -1410,6 +1410,17 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
                         }                            
                 }
               
+                // 调用新系统中的 zuti-updater
+                let updater_path = format!("{}/usr/bin/zuti-updater", tmpdir_clone);
+                match Command::new(&updater_path).spawn() {
+                    Ok(child) => {
+                        log::info!("Started zuti-updater from '{}' with PID {}", updater_path, child.id());
+                    }
+                    Err(e) => {
+                        log::error!("Failed to start zuti-updater from '{}': {}", updater_path, e);
+                    }
+                }
+
                 set_upgrade_progress(UpgradeProgressState::Upgrade(100));
 
                 
