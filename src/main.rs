@@ -7,8 +7,7 @@ use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-mod models;
-mod config;
+use zuti_helper::{config, models};
 use models::*;
 use config::logger;
 
@@ -1410,9 +1409,9 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
                         }                            
                 }
               
-                // 调用新系统中的 zuti-updater，等待执行完成后再继续
+                // 调用新系统中的 zuti-updater，将 tmpdir_clone 作为目标目录参数传入，等待执行完成后再继续
                 let updater_path = format!("{}/usr/bin/zuti-updater", tmpdir_clone);
-                match Command::new(&updater_path).output() {
+                match Command::new(&updater_path).arg(&tmpdir_clone).output() {
                     Ok(output) if output.status.success() => {
                         log::info!("zuti-updater executed successfully");
                     }

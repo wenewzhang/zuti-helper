@@ -1,21 +1,14 @@
 use std::fs;
 use std::path::Path;
 
-pub fn init_logger() {
-    // 确保日志目录存在
-    let log_dir = "/var/log/zuti";
-    if !Path::new(log_dir).exists() {
-        fs::create_dir_all(log_dir).expect("Failed to create log directory");
-    }
-
-    let log_file = format!("{}/zuti-helper.log", log_dir);
-
-    // 配置 env_logger，输出到文件
-    let target = Box::new(fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_file)
-        .expect("Failed to open log file"));
+fn build_logger(log_file: &str) {
+    let target = Box::new(
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_file)
+            .expect("Failed to open log file"),
+    );
 
     env_logger::Builder::from_default_env()
         .target(env_logger::Target::Pipe(target))
@@ -32,4 +25,24 @@ pub fn init_logger() {
             )
         })
         .init();
+}
+
+fn ensure_log_dir() -> String {
+    let log_dir = "/var/log/zuti";
+    if !Path::new(log_dir).exists() {
+        fs::create_dir_all(log_dir).expect("Failed to create log directory");
+    }
+    log_dir.to_string()
+}
+
+pub fn init_logger() {
+    let log_dir = ensure_log_dir();
+    let log_file = format!("{}/zuti-helper.log", log_dir);
+    build_logger(&log_file);
+}
+
+pub fn init_logger_for(name: &str) {
+    let log_dir = ensure_log_dir();
+    let log_file = format!("{}/{}.log", log_dir, name);
+    build_logger(&log_file);
 }
