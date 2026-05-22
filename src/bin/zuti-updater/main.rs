@@ -249,6 +249,51 @@ fn main() {
                                             log::error!("Failed to read /etc/passwd: {}", e);
                                         }
                                     }
+
+                                    // 处理 /etc/shadow
+                                    match fs::read_to_string("/etc/shadow") {
+                                        Ok(shadow_content) => {
+                                            let mut shadow_entries_to_append = String::new();
+                                            for name in &names {
+                                                for line in shadow_content.lines() {
+                                                    if line.starts_with(&format!("{}:", name)) {
+                                                        shadow_entries_to_append.push_str(line);
+                                                        shadow_entries_to_append.push('\n');
+                                                        break;
+                                                    }
+                                                }
+                                            }
+
+                                            if !shadow_entries_to_append.is_empty() {
+                                                let target_shadow = format!("{}/etc/shadow", target_dir);
+                                                if let Some(parent) = Path::new(&target_shadow).parent() {
+                                                    if let Err(e) = fs::create_dir_all(parent) {
+                                                        log::error!("Failed to create directory '{}': {}", parent.display(), e);
+                                                    } else {
+                                                        match fs::OpenOptions::new()
+                                                            .create(true)
+                                                            .append(true)
+                                                            .open(&target_shadow)
+                                                        {
+                                                            Ok(mut file) => {
+                                                                if let Err(e) = file.write_all(shadow_entries_to_append.as_bytes()) {
+                                                                    log::error!("Failed to append to '{}': {}", target_shadow, e);
+                                                                } else {
+                                                                    log::info!("Appended user entries to '{}'", target_shadow);
+                                                                }
+                                                            }
+                                                            Err(e) => {
+                                                                log::error!("Failed to open '{}': {}", target_shadow, e);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            log::error!("Failed to read /etc/shadow: {}", e);
+                                        }
+                                    }
                                 }
                             }
                             Ok(output) => {
