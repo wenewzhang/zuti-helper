@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
-use zuti_helper::config::consts::{SAMBA_PASSDB_PATH, UPGRADE_FILES, ZUTI_DB_PATH};
+use zuti_helper::config::consts::{SAMBA_PASSDB_PATH, SQLITE_MIGRATIONS_DIR, UPGRADE_FILES, ZUTI_DB_PATH};
 use zuti_helper::config::logger::init_logger_for;
 
 fn copy_entry(src: &Path, dest: &Path) {
@@ -319,5 +319,76 @@ fn main() {
         log::warn!("ZUTI database file '{}' does not exist, skipping backup", ZUTI_DB_PATH);
     }
 
+    // 升级 SQLite 数据库
+    let db_path = format!("{}{}", target_dir, ZUTI_DB_PATH);
+    let old_migrations_dir = SQLITE_MIGRATIONS_DIR;
+    let new_migrations_dir = format!("{}{}", target_dir, SQLITE_MIGRATIONS_DIR);
+
+    let old_dirs = collect_subdir_names(old_migrations_dir);
+    let new_dirs = collect_subdir_names(&new_migrations_dir);
+
+    // 需要升级的目录：新系统中存在但旧系统中不存在的目录
+    let mut upgrade_dirs: Vec<String> = new_dirs
+        .into_iter()
+        .filter(|d| !old_dirs.contains(d))
+        .collect();
+    upgrade_dirs.sort();
+
+    if upgrade_dirs.is_empty() {
+        log::info!("No new SQLite migrations to apply");
+    } else {
+        if let Some(parent) = Path::new(&db_path).parent() {
+            if let Err(e) = fs::create_dir_all(parent) {
+                log::error!("Failed to create database directory '{}': {}", parent.display(), e);
+            }
+        }
+        for dir in &upgrade_dirs {
+            let up_sql_path = format!("{}/{}/up.sql", new_migrations_dir, dir);
+            if !Path::new(&up_sql_path).exists() {
+                log::warn!("Migration up.sql not found: {}", up_sql_path);
+                continue;
+            }
+            log::info!("Applying SQLite migration: {}", up_sql_path);
+            match fs::File::open(&up_sql_path) {
+                Ok(file) => {
+                    match Command::new("sqlite3").arg(&db_path).stdin(file).output() {
+                        Ok(output) if output.status.success() => {
+                            log::info!("Applied migration '{}' successfully", dir);
+                        }
+                        Ok(output) => {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            log::error!("Migration '{}' failed: {}", dir, stderr);
+                        }
+                        Err(e) => {
+                            log::error!("Failed to execute sqlite3 for migration '{}': {}", dir, e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to open migration file '{}': {}", up_sql_path, e);
+                }
+            }
+        }
+    }
+
     log::info!("zuti-updater finished");
+}
+
+fn collect_subdir_names(dir: &str) -> Vec<String> {
+    let path = Path::new(dir);
+    if !path.exists() || !path.is_dir() {
+        return Vec::new();
+    }
+    let mut names = Vec::new();
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let entry_path = entry.path();
+            if entry_path.is_dir() {
+                if let Some(name) = entry_path.file_name().and_then(|n| n.to_str()) {
+                    names.push(name.to_string());
+                }
+            }
+        }
+    }
+    names
 }
