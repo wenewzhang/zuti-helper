@@ -435,6 +435,54 @@ fn main() {
         }
     }
 
+    // 备份 Podman images
+    match Command::new("sh")
+        .arg("-c")
+        .arg("podman save -m -o /tmp/all-images.tar $(podman images -q)")
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            log::info!("Podman images saved to /tmp/all-images.tar");
+            let tmp_dir = format!("{}/tmp", target_dir);
+            if let Err(e) = fs::create_dir_all(&tmp_dir) {
+                log::error!("Failed to create directory '{}': {}", tmp_dir, e);
+            } else {
+                let dest = format!("{}/all-images.tar", tmp_dir);
+                match fs::copy("/tmp/all-images.tar", &dest) {
+                    Ok(bytes) => {
+                        log::info!("Copied '/tmp/all-images.tar' -> '{}' ({} bytes)", dest, bytes);
+                        match Command::new("chroot")
+                            .arg(&target_dir)
+                            .args(["podman", "load", "-i", "/tmp/all-images.tar"])
+                            .output()
+                        {
+                            Ok(output) if output.status.success() => {
+                                log::info!("Podman images loaded in chroot successfully");
+                            }
+                            Ok(output) => {
+                                let stderr = String::from_utf8_lossy(&output.stderr);
+                                log::error!("Podman load in chroot failed: {}", stderr);
+                            }
+                            Err(e) => {
+                                log::error!("Failed to execute chroot podman load: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to copy '/tmp/all-images.tar' -> '{}': {}", dest, e);
+                    }
+                }
+            }
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            log::error!("Podman save failed: {}", stderr);
+        }
+        Err(e) => {
+            log::error!("Failed to execute podman save: {}", e);
+        }
+    }
+
     log::info!("zuti-updater finished");
 }
 
