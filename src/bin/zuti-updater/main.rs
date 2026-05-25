@@ -176,6 +176,70 @@ fn main() {
         log::warn!("SAMBA passdb file '{}' does not exist, skipping backup", SAMBA_PASSDB_PATH);
     }
 
+    // 备份 samba 用户信息
+    match Command::new("pdbedit").arg("-L").output() {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let samba_users: Vec<&str> = stdout
+                .lines()
+                .filter_map(|line| line.split(':').next())
+                .collect();
+
+            if !samba_users.is_empty() {
+                match fs::read_to_string("/etc/passwd") {
+                    Ok(content) => {
+                        let filtered: Vec<&str> = content
+                            .lines()
+                            .filter(|line| {
+                                line.split(':').next().map_or(false, |user| samba_users.contains(&user))
+                            })
+                            .collect();
+                        let passwd_dest = format!("{}/etc/passwd", target_dir);
+                        if let Some(parent) = Path::new(&passwd_dest).parent() {
+                            if let Err(e) = fs::create_dir_all(parent) {
+                                log::error!("Failed to create directory '{}': {}", parent.display(), e);
+                            }
+                        }
+                        match fs::write(&passwd_dest, filtered.join("\n")) {
+                            Ok(_) => log::info!("Backed up Samba users to '{}'", passwd_dest),
+                            Err(e) => log::error!("Failed to write '{}': {}", passwd_dest, e),
+                        }
+                    }
+                    Err(e) => log::error!("Failed to read /etc/passwd: {}", e),
+                }
+
+                match fs::read_to_string("/etc/shadow") {
+                    Ok(content) => {
+                        let filtered: Vec<&str> = content
+                            .lines()
+                            .filter(|line| {
+                                line.split(':').next().map_or(false, |user| samba_users.contains(&user))
+                            })
+                            .collect();
+                        let shadow_dest = format!("{}/etc/shadow", target_dir);
+                        if let Some(parent) = Path::new(&shadow_dest).parent() {
+                            if let Err(e) = fs::create_dir_all(parent) {
+                                log::error!("Failed to create directory '{}': {}", parent.display(), e);
+                            }
+                        }
+                        match fs::write(&shadow_dest, filtered.join("\n")) {
+                            Ok(_) => log::info!("Backed up Samba user shadows to '{}'", shadow_dest),
+                            Err(e) => log::error!("Failed to write '{}': {}", shadow_dest, e),
+                        }
+                    }
+                    Err(e) => log::error!("Failed to read /etc/shadow: {}", e),
+                }
+            }
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            log::error!("pdbedit -L failed: {}", stderr);
+        }
+        Err(e) => {
+            log::error!("Failed to execute pdbedit -L: {}", e);
+        }
+    }
+
     // 备份 ZUTI SQLite 数据库
     let zuti_db_path = Path::new(ZUTI_DB_PATH);
     if zuti_db_path.exists() {
