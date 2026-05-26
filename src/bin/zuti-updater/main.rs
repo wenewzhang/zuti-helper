@@ -223,9 +223,19 @@ fn main() {
                         {
                             log::error!("Failed to create directory '{}': {}", parent.display(), e);
                         }
-                        match fs::write(&passwd_dest, filtered.join("\n")) {
-                            Ok(_) => log::info!("Backed up Samba users to '{}'", passwd_dest),
-                            Err(e) => log::error!("Failed to write '{}': {}", passwd_dest, e),
+                        match fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&passwd_dest)
+                        {
+                            Ok(mut file) => {
+                                if let Err(e) = file.write_all(filtered.join("\n").as_bytes()) {
+                                    log::error!("Failed to append to '{}': {}", passwd_dest, e);
+                                } else {
+                                    log::info!("Backed up Samba users to '{}'", passwd_dest);
+                                }
+                            }
+                            Err(e) => log::error!("Failed to open '{}': {}", passwd_dest, e),
                         }
                     }
                     Err(e) => log::error!("Failed to read /etc/passwd: {}", e),
@@ -245,9 +255,19 @@ fn main() {
                         {
                             log::error!("Failed to create directory '{}': {}", parent.display(), e);
                         }
-                        match fs::write(&shadow_dest, filtered.join("\n")) {
-                            Ok(_) => log::info!("Backed up Samba user shadows to '{}'", shadow_dest),
-                            Err(e) => log::error!("Failed to write '{}': {}", shadow_dest, e),
+                        match fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&shadow_dest)
+                        {
+                            Ok(mut file) => {
+                                if let Err(e) = file.write_all(filtered.join("\n").as_bytes()) {
+                                    log::error!("Failed to append to '{}': {}", shadow_dest, e);
+                                } else {
+                                    log::info!("Backed up Samba user shadows to '{}'", shadow_dest);
+                                }
+                            }
+                            Err(e) => log::error!("Failed to open '{}': {}", shadow_dest, e),
                         }
                     }
                     Err(e) => log::error!("Failed to read /etc/shadow: {}", e),
