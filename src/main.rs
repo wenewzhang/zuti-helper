@@ -42,11 +42,11 @@ fn main() {
     let socket_path = "/run/zuti-helper.sock";
 
     // 如果 socket 文件已存在，先删除
-    if std::path::Path::new(socket_path).exists() {
-        if let Err(e) = std::fs::remove_file(socket_path) {
-            log::error!("Failed to remove existing socket: {}", e);
-            std::process::exit(1);
-        }
+    if std::path::Path::new(socket_path).exists()
+        && let Err(e) = std::fs::remove_file(socket_path)
+    {
+        log::error!("Failed to remove existing socket: {}", e);
+        std::process::exit(1);
     }
 
     let listener = match UnixListener::bind(socket_path) {
@@ -686,20 +686,18 @@ fn find_disk_by_id(device: &str) -> Result<String, String> {
             match std::fs::canonicalize(&path) {
                 Ok(real_path) => {
                     if is_partition {
-                        if real_path.to_string_lossy().ends_with(device) {
-                            if file_name.starts_with("ata-") || file_name.starts_with("nvme-eui.")
-                            {
-                                return Ok(path.to_string_lossy().to_string());
-                            }
+                        if real_path.to_string_lossy().ends_with(device)
+                            && (file_name.starts_with("ata-") || file_name.starts_with("nvme-eui."))
+                        {
+                            return Ok(path.to_string_lossy().to_string());
                         }
                     } else {
                         let real_path_str = real_path.to_string_lossy();
-                        if real_path_str == device_path {
-                            if file_name.starts_with("ata-")
-                                || (file_name.starts_with("nvme-") && !file_name.contains("-part"))
-                            {
-                                return Ok(path.to_string_lossy().to_string());
-                            }
+                        if real_path_str == device_path
+                            && (file_name.starts_with("ata-")
+                                || (file_name.starts_with("nvme-") && !file_name.contains("-part")))
+                        {
+                            return Ok(path.to_string_lossy().to_string());
                         }
                     }
                 }
@@ -1336,10 +1334,10 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
                 if !root_shadow_line.is_empty() {
                     let target_shadow = format!("{}/etc/shadow", t);
                     let mut shadow_content = String::new();
-                    if std::path::Path::new(&target_shadow).exists() {
-                        if let Ok(content) = std::fs::read_to_string(&target_shadow) {
-                            shadow_content = content;
-                        }
+                    if std::path::Path::new(&target_shadow).exists()
+                        && let Ok(content) = std::fs::read_to_string(&target_shadow)
+                    {
+                        shadow_content = content;
                     }
                     let mut lines: Vec<String> = shadow_content.lines().map(|s| s.to_string()).collect();
                     let mut found = false;

@@ -7,11 +7,11 @@ use zuti_helper::config::consts::{SAMBA_PASSDB_PATH, SQLITE_MIGRATIONS_DIR, UPGR
 use zuti_helper::config::logger::init_logger_for;
 
 fn copy_entry(src: &Path, dest: &Path) {
-    if let Some(parent) = dest.parent() {
-        if let Err(e) = fs::create_dir_all(parent) {
-            log::error!("Failed to create directory '{}': {}", parent.display(), e);
-            return;
-        }
+    if let Some(parent) = dest.parent()
+        && let Err(e) = fs::create_dir_all(parent)
+    {
+        log::error!("Failed to create directory '{}': {}", parent.display(), e);
+        return;
     }
 
     match fs::copy(src, dest) {
@@ -214,14 +214,14 @@ fn main() {
                         let filtered: Vec<&str> = content
                             .lines()
                             .filter(|line| {
-                                line.split(':').next().map_or(false, |user| samba_users.contains(&user))
+                                line.split(':').next().is_some_and(|user| samba_users.contains(&user))
                             })
                             .collect();
                         let passwd_dest = format!("{}/etc/passwd", target_dir);
-                        if let Some(parent) = Path::new(&passwd_dest).parent() {
-                            if let Err(e) = fs::create_dir_all(parent) {
-                                log::error!("Failed to create directory '{}': {}", parent.display(), e);
-                            }
+                        if let Some(parent) = Path::new(&passwd_dest).parent()
+                            && let Err(e) = fs::create_dir_all(parent)
+                        {
+                            log::error!("Failed to create directory '{}': {}", parent.display(), e);
                         }
                         match fs::write(&passwd_dest, filtered.join("\n")) {
                             Ok(_) => log::info!("Backed up Samba users to '{}'", passwd_dest),
@@ -236,14 +236,14 @@ fn main() {
                         let filtered: Vec<&str> = content
                             .lines()
                             .filter(|line| {
-                                line.split(':').next().map_or(false, |user| samba_users.contains(&user))
+                                line.split(':').next().is_some_and(|user| samba_users.contains(&user))
                             })
                             .collect();
                         let shadow_dest = format!("{}/etc/shadow", target_dir);
-                        if let Some(parent) = Path::new(&shadow_dest).parent() {
-                            if let Err(e) = fs::create_dir_all(parent) {
-                                log::error!("Failed to create directory '{}': {}", parent.display(), e);
-                            }
+                        if let Some(parent) = Path::new(&shadow_dest).parent()
+                            && let Err(e) = fs::create_dir_all(parent)
+                        {
+                            log::error!("Failed to create directory '{}': {}", parent.display(), e);
                         }
                         match fs::write(&shadow_dest, filtered.join("\n")) {
                             Ok(_) => log::info!("Backed up Samba user shadows to '{}'", shadow_dest),
@@ -429,10 +429,10 @@ fn main() {
     if upgrade_dirs.is_empty() {
         log::info!("No new SQLite migrations to apply");
     } else {
-        if let Some(parent) = Path::new(&db_path).parent() {
-            if let Err(e) = fs::create_dir_all(parent) {
-                log::error!("Failed to create database directory '{}': {}", parent.display(), e);
-            }
+        if let Some(parent) = Path::new(&db_path).parent()
+            && let Err(e) = fs::create_dir_all(parent)
+        {
+            log::error!("Failed to create database directory '{}': {}", parent.display(), e);
         }
         for dir in &upgrade_dirs {
             let up_sql_path = format!("{}/{}/up.sql", new_migrations_dir, dir);
@@ -481,7 +481,7 @@ fn main() {
                     Ok(bytes) => {
                         log::info!("Copied '/tmp/all-images.tar' -> '{}' ({} bytes)", dest, bytes);
                         match Command::new("chroot")
-                            .arg(&target_dir)
+                            .arg(target_dir)
                             .args(["podman", "load", "-i", "/tmp/all-images.tar"])
                             .output()
                         {
@@ -527,10 +527,10 @@ fn collect_subdir_names(dir: &str) -> Vec<String> {
     if let Ok(entries) = fs::read_dir(path) {
         for entry in entries.flatten() {
             let entry_path = entry.path();
-            if entry_path.is_dir() {
-                if let Some(name) = entry_path.file_name().and_then(|n| n.to_str()) {
-                    names.push(name.to_string());
-                }
+            if entry_path.is_dir()
+                && let Some(name) = entry_path.file_name().and_then(|n| n.to_str())
+            {
+                names.push(name.to_string());
             }
         }
     }
