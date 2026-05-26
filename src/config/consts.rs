@@ -6,5 +6,10 @@ pub const UPGRADE_FILES: &[&str] = &[
     "/etc/samba/conf.d/all-share.conf",
     "/etc/samba/conf.d/private.conf",
     "/etc/samba/conf.d/public.conf",
-    "/etc/systemd/network/",
+    "/.data/zuti/podman/",
 ];
+
+pub const UPGRADE_MUST_COPY_FILES: &[&str] = &[
+"/etc/systemd/network/",
+];
+    

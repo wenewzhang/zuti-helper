@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
-use zuti_helper::config::consts::{SAMBA_PASSDB_PATH, SQLITE_MIGRATIONS_DIR, UPGRADE_FILES, ZUTI_DB_PATH};
+use zuti_helper::config::consts::{SAMBA_PASSDB_PATH, SQLITE_MIGRATIONS_DIR, UPGRADE_FILES, UPGRADE_MUST_COPY_FILES, ZUTI_DB_PATH};
 use zuti_helper::config::logger::init_logger_for;
 
 fn copy_entry(src: &Path, dest: &Path) {
@@ -100,13 +100,15 @@ fn main() {
 
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        log::error!("Usage: zuti-updater <target_dir>");
+        log::error!("Usage: zuti-updater <target_dir> [is_fresh_install]");
         std::process::exit(1);
     }
     let target_dir = &args[1];
+    let is_fresh_install = args.get(2).map(|s| s == "true").unwrap_or(false);
     log::info!("Target directory: {}", target_dir);
+    log::info!("Is fresh install: {}", is_fresh_install);
 
-    for src_path in UPGRADE_FILES {
+    for src_path in UPGRADE_MUST_COPY_FILES {
         let src = Path::new(src_path);
         if !src.exists() {
             log::warn!("Source file '{}' does not exist, skipping", src_path);
@@ -123,7 +125,28 @@ fn main() {
         }
     }
 
+    if !is_fresh_install {
+    for src_path in UPGRADE_FILES {
+        let src = Path::new(src_path);
+        if !src.exists() {
+            log::warn!("Source file '{}' does not exist, skipping", src_path);
+            continue;
+        }
+
+        let dest_path = format!("{}{}", target_dir, src_path);
+        let dest = Path::new(&dest_path);
+
+        if src.is_dir() {
+            copy_directory(src, dest);
+        } else {
+            copy_entry(src, dest);
+        }
+    }
+    } else {
+        log::info!("Skipping files backup (fresh install)");
+    }
     // 备份 SAMBA passdb.tdb
+    if !is_fresh_install {
     let passdb_path = Path::new(SAMBA_PASSDB_PATH);
     if passdb_path.exists() {
         match Command::new("tdbbackup")
@@ -239,8 +262,11 @@ fn main() {
             log::error!("Failed to execute pdbedit -L: {}", e);
         }
     }
-
+    } else {
+        log::info!("Skipping samba backup (fresh install)");
+    }
     // 备份 ZUTI SQLite 数据库
+    if !is_fresh_install {
     let zuti_db_path = Path::new(ZUTI_DB_PATH);
     if zuti_db_path.exists() {
         let db_dest = format!("{}{}", target_dir, ZUTI_DB_PATH);
@@ -382,7 +408,9 @@ fn main() {
     } else {
         log::warn!("ZUTI database file '{}' does not exist, skipping backup", ZUTI_DB_PATH);
     }
-
+    } else {
+        log::info!("Skipping ZUTI database backup (fresh install)");
+    }
     // 升级 SQLite 数据库
     let db_path = format!("{}{}", target_dir, ZUTI_DB_PATH);
     let old_migrations_dir = SQLITE_MIGRATIONS_DIR;
@@ -436,6 +464,7 @@ fn main() {
     }
 
     // 备份 Podman images
+    if !is_fresh_install {
     match Command::new("sh")
         .arg("-c")
         .arg("podman save -m -o /tmp/all-images.tar $(podman images -q)")
@@ -481,6 +510,9 @@ fn main() {
         Err(e) => {
             log::error!("Failed to execute podman save: {}", e);
         }
+    }
+    } else {
+        log::info!("Skipping Podman images backup (fresh install)");
     }
 
     log::info!("zuti-updater finished");
