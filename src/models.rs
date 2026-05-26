@@ -75,6 +75,7 @@ pub struct CreateZfsShareRequest {
 #[derive(Deserialize, Debug)]
 pub struct UpgradeRequest {
     pub file: String,
+    pub fresh_install: bool,
 }
 
 // upgrade 响应结构体

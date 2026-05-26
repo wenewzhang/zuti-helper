@@ -1217,6 +1217,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
     let dataset_name_clone = dataset_name.clone();
     let mount_dir_clone = mount_dir.clone();
     let tmpdir_clone = tmpdir.clone();
+    let fresh_install = req.fresh_install;
     std::thread::spawn(move || {
         match child.wait() {
             Ok(status) if status.success() => {
@@ -1409,7 +1410,12 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
               
                 // 调用新系统中的 zuti-updater，将 tmpdir_clone 作为目标目录参数传入，等待执行完成后再继续
                 let updater_path = format!("{}/usr/bin/zuti-updater", tmpdir_clone);
-                match Command::new(&updater_path).arg(&tmpdir_clone).output() {
+                let mut updater_cmd = Command::new(&updater_path);
+                updater_cmd.arg(&tmpdir_clone);
+                if fresh_install {
+                    updater_cmd.arg("fresh_install");
+                }
+                match updater_cmd.output() {
                     Ok(output) if output.status.success() => {
                         log::info!("zuti-updater executed successfully");
                     }

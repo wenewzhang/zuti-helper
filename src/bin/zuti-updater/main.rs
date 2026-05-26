@@ -104,7 +104,7 @@ fn main() {
         std::process::exit(1);
     }
     let target_dir = &args[1];
-    let is_fresh_install = args.get(2).map(|s| s == "true").unwrap_or(false);
+    let is_fresh_install = args.get(2).map(|s| s == "fresh_install").unwrap_or(false);
     log::info!("Target directory: {}", target_dir);
     log::info!("Is fresh install: {}", is_fresh_install);
 
