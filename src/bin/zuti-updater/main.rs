@@ -487,7 +487,7 @@ fn main() {
     if !is_fresh_install {
     match Command::new("sh")
         .arg("-c")
-        .arg("podman save -m -o /tmp/all-images.tar $(podman images -q)")
+        .arg("podman save -m -o /tmp/all-images.tar $(podman images --format '{{.Repository}}:{{.Tag}}' | grep -v '<none>')")
         .output()
     {
         Ok(output) if output.status.success() => {
