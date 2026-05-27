@@ -500,6 +500,34 @@ fn main() {
                 match fs::copy("/tmp/all-images.tar", &dest) {
                     Ok(bytes) => {
                         log::info!("Copied '/tmp/all-images.tar' -> '{}' ({} bytes)", dest, bytes);
+
+                        // 为 chroot 准备 proc/sys/dev
+                        let proc_dir = format!("{}/proc", target_dir);
+                        let sys_dir = format!("{}/sys", target_dir);
+                        let dev_dir = format!("{}/dev", target_dir);
+                        let _ = fs::create_dir_all(&proc_dir);
+                        let _ = fs::create_dir_all(&sys_dir);
+                        let _ = fs::create_dir_all(&dev_dir);
+
+                        let mount = |desc: &str, args: &[&str]| {
+                            match Command::new("mount").args(args).output() {
+                                Ok(output) if output.status.success() => {
+                                    log::info!("Mounted {}", desc);
+                                }
+                                Ok(output) => {
+                                    let stderr = String::from_utf8_lossy(&output.stderr);
+                                    log::warn!("Failed to mount {}: {}", desc, stderr.trim());
+                                }
+                                Err(e) => {
+                                    log::warn!("Failed to execute mount {}: {}", desc, e);
+                                }
+                            }
+                        };
+
+                        mount("proc", &["-t", "proc", "proc", &proc_dir]);
+                        mount("sysfs", &["-t", "sysfs", "sys", &sys_dir]);
+                        mount("dev", &["--bind", "/dev", &dev_dir]);
+
                         match Command::new("chroot")
                             .arg(target_dir)
                             .args(["podman", "load", "-i", "/tmp/all-images.tar"])
@@ -516,6 +544,25 @@ fn main() {
                                 log::error!("Failed to execute chroot podman load: {}", e);
                             }
                         }
+
+                        let umount = |desc: &str, path: &str| {
+                            match Command::new("umount").arg(path).output() {
+                                Ok(output) if output.status.success() => {
+                                    log::info!("Unmounted {}", desc);
+                                }
+                                Ok(output) => {
+                                    let stderr = String::from_utf8_lossy(&output.stderr);
+                                    log::warn!("Failed to unmount {}: {}", desc, stderr.trim());
+                                }
+                                Err(e) => {
+                                    log::warn!("Failed to execute umount {}: {}", desc, e);
+                                }
+                            }
+                        };
+
+                        umount("proc", &proc_dir);
+                        umount("sysfs", &sys_dir);
+                        umount("dev", &dev_dir);
                     }
                     Err(e) => {
                         log::error!("Failed to copy '/tmp/all-images.tar' -> '{}': {}", dest, e);
