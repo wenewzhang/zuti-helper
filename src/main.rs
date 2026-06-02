@@ -212,9 +212,9 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
                 }
             }
 
-            // 2. 设置 mountpoint
+            // 2. 设置 mountpoint（-u 只改属性，不立即挂载/卸载，避免临时目录 busy）
             let set_mp = Command::new("zfs")
-                .args(["set", &format!("mountpoint={}", mount_point), pool_name])
+                .args(["set", "-u", &format!("mountpoint={}", mount_point), pool_name])
                 .output();
             match set_mp {
                 Ok(output) if output.status.success() => {}
