@@ -157,7 +157,7 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
         if mount_point.is_empty() {
             // mount_point 为空字符串时，等同于 null
             Command::new("zpool")
-                .args(["import", pool_name])
+                .args(["import", "-f", pool_name])
                 .output()
         } else {
             // mount_point 有值时，先临时导入设置 mountpoint，再正常导入
@@ -179,7 +179,7 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
 
             // 1. 临时导入: zpool import -o readonly=on -R <temp_dir> <pool>
             let temp_import = Command::new("zpool")
-                .args(["import", "-R", &temp_dir, pool_name])
+                .args(["import", "-f", "-R", &temp_dir, pool_name])
                 .output();
             match temp_import {
                 Ok(output) if output.status.success() => {}
@@ -272,7 +272,7 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
 
             // 4. 正常导入
             let final_import = Command::new("zpool")
-                .args(["import", pool_name])
+                .args(["import", "-f", pool_name])
                 .output();
 
             // 清理临时目录
@@ -283,7 +283,7 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
     } else {
         // mount_point 为 null
         Command::new("zpool")
-            .args(["import", pool_name])
+            .args(["import", "-f", pool_name])
             .output()
     };
 
