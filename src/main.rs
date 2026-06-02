@@ -111,6 +111,7 @@ fn handle_connection(mut stream: UnixStream) {
             Request::CreatePool(req) => handle_create_pool(req),
             Request::ExportPool(req) => handle_export_pool(req),
             Request::ImportPool(req) => handle_import_pool(req),
+            Request::ImportPoolPlus(req) => handle_import_pool_plus(req),
             Request::CreateDirectory(req) => handle_create_directory(req),
             Request::CreateZfsShare(req) => handle_create_zfs_share(req),
             Request::Upgrade(req) => handle_upgrade(req),
@@ -319,6 +320,73 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
                     };
                 }                   
                 let resp_data = ImportPoolResponse {
+                    success: true,
+                    message: format!("Pool '{}' imported successfully", pool_name),
+                    error: None,
+                };
+                Response {
+                    success: true,
+                    data: serde_json::to_value(resp_data).ok(),
+                    error: None,
+                }
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                log::error!("Failed to import pool '{}': {}", pool_name, stderr);
+                Response {
+                    success: false,
+                    data: None,
+                    error: Some(format!("Failed to import pool '{}': {}", pool_name, stderr)),
+                }
+            }
+        }
+        Err(e) => {
+            log::error!("Failed to execute zpool import for '{}': {}", pool_name, e);
+            Response {
+                success: false,
+                data: None,
+                error: Some(format!(
+                    "Failed to execute zpool import for '{}': {}",
+                    pool_name, e
+                )),
+            }
+        }
+    }
+}
+
+fn handle_import_pool_plus(req: ImportPoolPlusRequest) -> Response {
+    let pool_name = &req.pool_name;
+
+    // 验证 pool_name 不为空
+    if pool_name.is_empty() {
+        log::error!("Pool name is required");
+        return Response {
+            success: false,
+            data: None,
+            error: Some("Pool name is required".to_string()),
+        };
+    }
+
+    // 构建 zpool import 命令参数
+    let mut args: Vec<String> = vec!["import".to_string()];
+
+    // force 参数: -f
+    if req.force == Some(true) {
+        args.push("-f".to_string());
+    }
+
+    // readonly 参数: -o readonly=on
+    if req.readonly == Some(true) {
+        args.push("-o".to_string());
+        args.push("readonly=on".to_string());
+    }
+
+    args.push(pool_name.clone());
+
+    // 执行 zpool import 命令
+    match Command::new("zpool").args(&args).output() {
+        Ok(output) => {
+            if output.status.success() {
+                let resp_data = ImportPoolPlusResponse {
                     success: true,
                     message: format!("Pool '{}' imported successfully", pool_name),
                     error: None,

@@ -46,6 +46,22 @@ pub struct ImportPoolResponse {
     pub error: Option<String>,
 }
 
+// import_pool_plus 请求结构体
+#[derive(Deserialize, Debug)]
+pub struct ImportPoolPlusRequest {
+    pub pool_name: String,
+    pub force: Option<bool>,
+    pub readonly: Option<bool>,
+}
+
+// import_pool_plus 响应结构体
+#[derive(Serialize, Debug)]
+pub struct ImportPoolPlusResponse {
+    pub success: bool,
+    pub message: String,
+    pub error: Option<String>,
+}
+
 // create_directory 请求结构体
 #[derive(Deserialize, Debug)]
 pub struct CreateDirectoryRequest {
@@ -115,6 +131,8 @@ pub enum Request {
     ExportPool(ExportPoolRequest),
     #[serde(rename = "import_pool")]
     ImportPool(ImportPoolRequest),
+    #[serde(rename = "import_pool_plus")]
+    ImportPoolPlus(ImportPoolPlusRequest),
     #[serde(rename = "create_directory")]
     CreateDirectory(CreateDirectoryRequest),
     #[serde(rename = "create_zfs_share")]
