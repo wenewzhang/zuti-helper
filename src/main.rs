@@ -145,6 +145,7 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
 
     // 验证 pool_name 不为空
     if pool_name.is_empty() {
+        log::error!("Pool name is required");
         return Response {
             success: false,
             data: None,
@@ -170,6 +171,7 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
                     .as_secs()
             );
             if let Err(e) = std::fs::create_dir_all(&temp_dir) {
+                log::error!("Failed to create temp dir '{}': {}", temp_dir, e);
                 return Response {
                     success: false,
                     data: None,
@@ -186,6 +188,7 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
                 Ok(output) => {
                     let _ = std::fs::remove_dir_all(&temp_dir);
                     let stderr = String::from_utf8_lossy(&output.stderr);
+                    log::error!("Failed to temp import pool '{}': {}", pool_name, stderr);
                     return Response {
                         success: false,
                         data: None,
@@ -197,6 +200,7 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
                 }
                 Err(e) => {
                     let _ = std::fs::remove_dir_all(&temp_dir);
+                    log::error!("Failed to execute temp zpool import for '{}': {}", pool_name, e);
                     return Response {
                         success: false,
                         data: None,
@@ -217,6 +221,7 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
                 Ok(output) => {
                     let _ = std::fs::remove_dir_all(&temp_dir);
                     let stderr = String::from_utf8_lossy(&output.stderr);
+                    log::error!("Failed to set mountpoint for '{}': {}", pool_name, stderr);
                     return Response {
                         success: false,
                         data: None,
@@ -228,6 +233,7 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
                 }
                 Err(e) => {
                     let _ = std::fs::remove_dir_all(&temp_dir);
+                    log::error!("Failed to execute zfs set mountpoint for '{}': {}", pool_name, e);
                     return Response {
                         success: false,
                         data: None,
@@ -248,6 +254,7 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
                 Ok(output) => {
                     let _ = std::fs::remove_dir_all(&temp_dir);
                     let stderr = String::from_utf8_lossy(&output.stderr);
+                    log::error!("Failed to export pool '{}': {}", pool_name, stderr);
                     return Response {
                         success: false,
                         data: None,
@@ -259,6 +266,7 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
                 }
                 Err(e) => {
                     let _ = std::fs::remove_dir_all(&temp_dir);
+                    log::error!("Failed to execute zpool export for '{}': {}", pool_name, e);
                     return Response {
                         success: false,
                         data: None,
@@ -300,6 +308,7 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
                     .args(["set", &format!("canmount={}", canmount_value), pool_name])
                     .output();
                 if let Err(e) = canmount_result {
+                    log::error!("Pool '{}' failed to set canmount: {}", pool_name, e);
                     return Response {
                         success: false,
                         data: None,
@@ -321,21 +330,25 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
                 }
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
+                log::error!("Failed to import pool '{}': {}", pool_name, stderr);
                 Response {
                     success: false,
                     data: None,
-                    error: Some(format!("Failed to import pool '{}': {}", POOL_NAME, stderr)),
+                    error: Some(format!("Failed to import pool '{}': {}", pool_name, stderr)),
                 }
             }
         }
-        Err(e) => Response {
-            success: false,
-            data: None,
-            error: Some(format!(
-                "Failed to execute zpool import for '{}': {}",
-                pool_name, e
-            )),
-        },
+        Err(e) => {
+            log::error!("Failed to execute zpool import for '{}': {}", pool_name, e);
+            Response {
+                success: false,
+                data: None,
+                error: Some(format!(
+                    "Failed to execute zpool import for '{}': {}",
+                    pool_name, e
+                )),
+            }
+        }
     }
 }
 
