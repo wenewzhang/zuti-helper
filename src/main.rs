@@ -158,7 +158,7 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
         if mount_point.is_empty() {
             // mount_point 为空字符串时，等同于 null
             Command::new("zpool")
-                .args(["import", "-f", pool_name])
+                .args(["import", pool_name])
                 .output()
         } else {
             // mount_point 有值时，先临时导入设置 mountpoint，再正常导入
@@ -181,7 +181,7 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
 
             // 1. 临时导入: zpool import -o readonly=on -R <temp_dir> <pool>
             let temp_import = Command::new("zpool")
-                .args(["import", "-f", "-R", &temp_dir, pool_name])
+                .args(["import", "-R", &temp_dir, pool_name])
                 .output();
             match temp_import {
                 Ok(output) if output.status.success() => {}
@@ -280,7 +280,7 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
 
             // 4. 正常导入
             let final_import = Command::new("zpool")
-                .args(["import", "-f", pool_name])
+                .args(["import", pool_name])
                 .output();
 
             // 清理临时目录
@@ -291,7 +291,7 @@ fn handle_import_pool(req: ImportPoolRequest) -> Response {
     } else {
         // mount_point 为 null
         Command::new("zpool")
-            .args(["import", "-f", pool_name])
+            .args(["import", pool_name])
             .output()
     };
 
@@ -1482,11 +1482,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
 /// 清理 upgrade 过程中产生的临时资源（尽力而为）
 fn cleanup_upgrade(mount_dir: &str, tmpdir: &str) {
     let _ = Command::new("umount").arg(tmpdir).output();
-    // let _ = Command::new("zfs").args(["umount", dataset_name]).output();
-    // let _ = Command::new("zpool").args(["export", "-f", pool_name]).output();
     let _ = Command::new("umount").arg(mount_dir).output();
-    // let _ = std::fs::remove_dir_all(mount_dir);
-    // let _ = std::fs::remove_dir_all(tmpdir);
 }
 
 /// 检查指定路径是否为挂载点（通过 mountpoint -q 命令）
