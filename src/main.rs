@@ -1389,7 +1389,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
                 run("enable systemd-resolved", "chroot", &[t, "systemctl", "enable", "systemd-resolved"]);
                 run("enable systemd-networkd", "chroot", &[t, "systemctl", "enable", "systemd-networkd"]);
                 run("disable networking", "chroot", &[t, "systemctl", "disable", "networking"]);
-                run("enable podman", "chroot", &[t, "systemctl", "enable", "podman"]);
+                run("enable podman", "chroot", &[t, "systemctl", "enable", "podman-restart"]);
                 run("enable nginx", "chroot", &[t, "systemctl", "enable", "nginx"]);
 
                 set_upgrade_progress(UpgradeProgressState::Upgrade(90));
