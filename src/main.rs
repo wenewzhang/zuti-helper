@@ -471,6 +471,7 @@ fn handle_create_directory(req: CreateDirectoryRequest) -> Response {
 
     // 验证 directory 不为空
     if directory.is_empty() {
+        log::error!("Directory path is required");
         return Response {
             success: false,
             data: None,
@@ -839,6 +840,7 @@ fn handle_update_zfs_share(req: UpdateZfsShareRequest) -> Response {
 
     // 验证参数不为空
     if dataset.is_empty() {
+        log::error!("Dataset name is required");
         return Response {
             success: false,
             data: None,
@@ -863,6 +865,7 @@ fn handle_update_zfs_share(req: UpdateZfsShareRequest) -> Response {
         {
             Ok(output) => output,
             Err(e) => {
+                log::error!("Failed to set readonly=on for dataset '{}': {}", dataset, e);
                 return Response {
                     success: false,
                     data: None,
@@ -875,6 +878,7 @@ fn handle_update_zfs_share(req: UpdateZfsShareRequest) -> Response {
         };
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            log::error!("Failed to set readonly=on for dataset '{}': {}", dataset, stderr);
             return Response {
                 success: false,
                 data: None,
@@ -892,6 +896,7 @@ fn handle_update_zfs_share(req: UpdateZfsShareRequest) -> Response {
         {
             Ok(output) => output,
             Err(e) => {
+                log::error!("Failed to set readonly=off for dataset '{}': {}", dataset, e);
                 return Response {
                     success: false,
                     data: None,
@@ -904,6 +909,7 @@ fn handle_update_zfs_share(req: UpdateZfsShareRequest) -> Response {
         };
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            log::error!("Failed to set readonly=off for dataset '{}': {}", dataset, stderr);
             return Response {
                 success: false,
                 data: None,
@@ -921,6 +927,7 @@ fn handle_update_zfs_share(req: UpdateZfsShareRequest) -> Response {
         {
             Ok(output) => output,
             Err(e) => {
+                log::error!("Failed to chown for directory '{}': {}", directory, e);
                 return Response {
                     success: false,
                     data: None,
@@ -933,6 +940,7 @@ fn handle_update_zfs_share(req: UpdateZfsShareRequest) -> Response {
         };
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            log::error!("Failed to chown for directory '{}': {}", directory, stderr);
             return Response {
                 success: false,
                 data: None,
@@ -956,6 +964,7 @@ fn handle_update_zfs_share(req: UpdateZfsShareRequest) -> Response {
             _          => "o+w+r+x",
         };
         let chmod_arg = format!("{},{},{}", owner_mod, group_mod, guest_mod);
+        log::info!("chmod_arg: {} directory: {}", chmod_arg, directory);
 
         let output = match Command::new("chmod")
             .args(["-R", &chmod_arg, directory])
@@ -963,6 +972,7 @@ fn handle_update_zfs_share(req: UpdateZfsShareRequest) -> Response {
         {
             Ok(output) => output,
             Err(e) => {
+                log::error!("Failed to chmod for directory '{}': {}", directory, e);
                 return Response {
                     success: false,
                     data: None,
@@ -975,6 +985,7 @@ fn handle_update_zfs_share(req: UpdateZfsShareRequest) -> Response {
         };
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            log::error!("Failed to chmod for directory '{}': {}", directory, stderr);
             return Response {
                 success: false,
                 data: None,
