@@ -891,6 +891,29 @@ fn handle_create_zfs_share(req: CreateZfsShareRequest) -> Response {
         };
     }
 
+    let output = Command::new("zfs")
+        .args(["set", "sharesmb=on", &dataset])
+        .output();
+
+    match output {
+        Ok(result) => {
+            if !result.status.success() {
+                let stderr = String::from_utf8_lossy(&result.stderr);
+                return Response {
+                    success: false,
+                    data: None,
+                    error: Some(format!("Failed to set sharesmb=on for dataset '{}': {}", dataset, stderr)),
+                };
+            }
+        }
+        Err(e) => {
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to execute zfs set sharesmb=on '{}': {}", dataset, e)),
+            };
+        }
+    }
     // Step 2: zfs set quota=<quota> <pool>/<share_name>（quota 为 none 时跳过）
     if quota.to_lowercase() != "none" {
         let output = Command::new("zfs")
