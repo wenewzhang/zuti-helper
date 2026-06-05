@@ -120,6 +120,25 @@ pub struct CreateZfsShareResponse {
     pub error: Option<String>,
 }
 
+// update_zfs_share 请求结构体
+#[derive(Deserialize, Debug)]
+pub struct UpdateZfsShareRequest {
+    #[serde(rename = "update_zfs_share")]
+    pub dataset: String,
+    pub owner: String,
+    pub permission: String,
+    pub guest_permission: String,
+    pub directory: String,
+}
+
+// update_zfs_share 响应结构体
+#[derive(Serialize, Debug)]
+pub struct UpdateZfsShareResponse {
+    pub success: bool,
+    pub message: String,
+    pub error: Option<String>,
+}
+
 // 通用请求包装
 #[derive(Deserialize, Debug)]
 #[serde(tag = "action")]
@@ -136,6 +155,8 @@ pub enum Request {
     CreateDirectory(CreateDirectoryRequest),
     #[serde(rename = "create_zfs_share")]
     CreateZfsShare(CreateZfsShareRequest),
+    #[serde(rename = "update_zfs_share")]
+    UpdateZfsShare(UpdateZfsShareRequest),
     #[serde(rename = "upgrade")]
     Upgrade(UpgradeRequest),
     #[serde(rename = "upgrading_progress")]

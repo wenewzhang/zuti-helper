@@ -114,6 +114,7 @@ fn handle_connection(mut stream: UnixStream) {
             Request::ImportPoolPlus(req) => handle_import_pool_plus(req),
             Request::CreateDirectory(req) => handle_create_directory(req),
             Request::CreateZfsShare(req) => handle_create_zfs_share(req),
+            Request::UpdateZfsShare(req) => handle_update_zfs_share(req),
             Request::Upgrade(req) => handle_upgrade(req),
             Request::UpgradingProgress(req) => handle_upgrading_progress(req),
         };
@@ -830,6 +831,174 @@ fn find_partition_by_id(disk_name: &str, part_suffix: &str) -> Result<String, St
         "Cannot find partition ID for '{}{}'",
         disk_name, part_suffix
     ))
+}
+
+fn handle_update_zfs_share(req: UpdateZfsShareRequest) -> Response {
+    let dataset = &req.dataset;
+    let directory = &req.directory;
+
+    // 验证参数不为空
+    if dataset.is_empty() {
+        return Response {
+            success: false,
+            data: None,
+            error: Some("Dataset name is required".to_string()),
+        };
+    }
+    if directory.is_empty() {
+        return Response {
+            success: false,
+            data: None,
+            error: Some("Directory path is required".to_string()),
+        };
+    }
+
+    let is_all_readonly = req.permission == "readonly" && req.guest_permission == "readonly";
+
+    if is_all_readonly {
+        // 直接设置 dataset readonly=on
+        let output = match Command::new("zfs")
+            .args(["set", "readonly=on", dataset])
+            .output()
+        {
+            Ok(output) => output,
+            Err(e) => {
+                return Response {
+                    success: false,
+                    data: None,
+                    error: Some(format!(
+                        "Failed to set readonly=on for dataset '{}': {}",
+                        dataset, e
+                    )),
+                };
+            }
+        };
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!(
+                    "Failed to set readonly=on for dataset '{}': {}",
+                    dataset, stderr
+                )),
+            };
+        }
+    } else {
+        // 先确保 readonly=off
+        let output = match Command::new("zfs")
+            .args(["set", "readonly=off", dataset])
+            .output()
+        {
+            Ok(output) => output,
+            Err(e) => {
+                return Response {
+                    success: false,
+                    data: None,
+                    error: Some(format!(
+                        "Failed to set readonly=off for dataset '{}': {}",
+                        dataset, e
+                    )),
+                };
+            }
+        };
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!(
+                    "Failed to set readonly=off for dataset '{}': {}",
+                    dataset, stderr
+                )),
+            };
+        }
+
+        // 修改 mountpoint 的 owner
+        let output = match Command::new("chown")
+            .args(["-R", &format!("{}:{}", req.owner, req.owner), directory])
+            .output()
+        {
+            Ok(output) => output,
+            Err(e) => {
+                return Response {
+                    success: false,
+                    data: None,
+                    error: Some(format!(
+                        "Failed to chown for directory '{}': {}",
+                        directory, e
+                    )),
+                };
+            }
+        };
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!(
+                    "Failed to chown for directory '{}': {}",
+                    directory, stderr
+                )),
+            };
+        }
+
+        // 修改 mountpoint 的权限
+        let owner_mod = if req.permission == "readonly" { "u-w" } else { "u+w" };
+        let group_mod = match req.guest_permission.as_str() {
+            "readonly" => "g-w+r+x",
+            "none"     => "g=",
+            _          => "g+w+r+x",
+        };
+        let guest_mod = match req.guest_permission.as_str() {
+            "readonly" => "o-w+r+x",
+            "none"     => "o=",
+            _          => "o+w+r+x",
+        };
+        let chmod_arg = format!("{},{},{}", owner_mod, group_mod, guest_mod);
+
+        let output = match Command::new("chmod")
+            .args(["-R", &chmod_arg, directory])
+            .output()
+        {
+            Ok(output) => output,
+            Err(e) => {
+                return Response {
+                    success: false,
+                    data: None,
+                    error: Some(format!(
+                        "Failed to chmod for directory '{}': {}",
+                        directory, e
+                    )),
+                };
+            }
+        };
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!(
+                    "Failed to chmod for directory '{}': {}",
+                    directory, stderr
+                )),
+            };
+        }
+    }
+
+    let resp_data = UpdateZfsShareResponse {
+        success: true,
+        message: format!(
+            "ZFS share '{}' updated successfully, directory '{}'",
+            dataset, directory
+        ),
+        error: None,
+    };
+    Response {
+        success: true,
+        data: serde_json::to_value(resp_data).ok(),
+        error: None,
+    }
 }
 
 fn handle_create_zfs_share(req: CreateZfsShareRequest) -> Response {
