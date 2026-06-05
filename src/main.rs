@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::collections::HashSet;
 use std::process::Command;
@@ -117,6 +117,7 @@ fn handle_connection(mut stream: UnixStream) {
             Request::UpdateZfsShare(req) => handle_update_zfs_share(req),
             Request::Upgrade(req) => handle_upgrade(req),
             Request::UpgradingProgress(req) => handle_upgrading_progress(req),
+            Request::ListZfsShares(req) => handle_list_zfs_shares(req),
         };
 
         if !send_response(&mut stream, &resp) {
@@ -1171,6 +1172,122 @@ fn handle_create_zfs_share(req: CreateZfsShareRequest) -> Response {
     }
 }
 
+
+fn handle_list_zfs_shares(_req: ListZfsSharesRequest) -> Response {
+    let output = match Command::new("zfs")
+        .args(["get", "-H", "-o", "name,value", "sharesmb"])
+        .output()
+    {
+        Ok(result) => result,
+        Err(e) => {
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to execute zfs get command: {}", e)),
+            };
+        }
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Response {
+            success: false,
+            data: None,
+            error: Some(format!("Failed to list ZFS shares: {}", stderr)),
+        };
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut share_list = Vec::new();
+
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 2 && parts[1] == "on" {
+            let dataset = parts[0].to_string();
+
+            let mountpoint_output = Command::new("zfs")
+                .args(["get", "-H", "-o", "value", "mountpoint", &dataset])
+                .output();
+
+            let (owner, permission, guest_permission) = match mountpoint_output {
+                Ok(mp_result) if mp_result.status.success() => {
+                    let mountpoint = String::from_utf8_lossy(&mp_result.stdout).trim().to_string();
+                    let path = std::path::Path::new(&mountpoint);
+                    if path.exists() && path.is_dir() {
+                        match std::fs::metadata(path) {
+                            Ok(metadata) => {
+                                let uid = metadata.uid();
+                                let mode = metadata.mode();
+                                let owner_name = Command::new("id")
+                                    .args(["-nu", &uid.to_string()])
+                                    .output()
+                                    .ok()
+                                    .and_then(|out| {
+                                        if out.status.success() {
+                                            Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .unwrap_or_else(|| uid.to_string());
+
+                                let readonly = Command::new("zfs")
+                                    .args(["get", "-H", "-o", "value", "readonly", &dataset])
+                                    .output()
+                                    .ok()
+                                    .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string() == "on")
+                                    .unwrap_or(false);
+
+                                let owner_perm = if readonly {
+                                    "readonly".to_string()
+                                } else if mode & 0o200 != 0 {
+                                    "write".to_string()
+                                } else {
+                                    "readonly".to_string()
+                                };
+
+                                let guest_perm = if readonly {
+                                    "readonly".to_string()
+                                } else if mode & 0o002 != 0 {
+                                    "write".to_string()
+                                } else if mode & 0o004 != 0 {
+                                    "readonly".to_string()
+                                } else {
+                                    "none".to_string()
+                                };
+
+                                (owner_name, owner_perm, guest_perm)
+                            }
+                            Err(_) => ("unknown".to_string(), "readonly".to_string(), "readonly".to_string()),
+                        }
+                    } else {
+                        ("unknown".to_string(), "readonly".to_string(), "readonly".to_string())
+                    }
+                }
+                _ => ("unknown".to_string(), "readonly".to_string(), "readonly".to_string()),
+            };
+
+            share_list.push(ZfsSmbShareInfo {
+                dataset,
+                owner,
+                permission,
+                guest_permission,
+            });
+        }
+    }
+
+    let resp_data = ListZfsSharesResponse {
+        success: true,
+        shares: share_list,
+        message: "ZFS SMB shares listed successfully".to_string(),
+        error: None,
+    };
+    Response {
+        success: true,
+        data: serde_json::to_value(resp_data).ok(),
+        error: None,
+    }
+}
 
 fn handle_upgrading_progress(_req: UpgradingProgressRequest) -> Response {
     let (state_str, progress) = match get_upgrade_progress().lock() {

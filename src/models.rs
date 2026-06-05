@@ -138,6 +138,28 @@ pub struct UpdateZfsShareResponse {
     pub error: Option<String>,
 }
 
+// list_zfs_shares 请求结构体
+#[derive(Deserialize, Debug)]
+pub struct ListZfsSharesRequest {}
+
+// ZFS SMB Share 信息
+#[derive(Serialize, Debug)]
+pub struct ZfsSmbShareInfo {
+    pub dataset: String,
+    pub owner: String,
+    pub permission: String,
+    pub guest_permission: String,
+}
+
+// list_zfs_shares 响应结构体
+#[derive(Serialize, Debug)]
+pub struct ListZfsSharesResponse {
+    pub success: bool,
+    pub shares: Vec<ZfsSmbShareInfo>,
+    pub message: String,
+    pub error: Option<String>,
+}
+
 // 通用请求包装
 #[derive(Deserialize, Debug)]
 #[serde(tag = "action")]
@@ -160,6 +182,8 @@ pub enum Request {
     Upgrade(UpgradeRequest),
     #[serde(rename = "upgrading_progress")]
     UpgradingProgress(UpgradingProgressRequest),
+    #[serde(rename = "list_zfs_shares")]
+    ListZfsShares(ListZfsSharesRequest),
 }
 
 // 通用响应包装
