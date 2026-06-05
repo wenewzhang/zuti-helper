@@ -834,12 +834,12 @@ fn find_partition_by_id(disk_name: &str, part_suffix: &str) -> Result<String, St
 
 fn handle_create_zfs_share(req: CreateZfsShareRequest) -> Response {
     let share_name = &req.share_name;
-    let dataset_name = &req.dataset_name;
+    let dataset = &req.dataset_name;
     let quota = &req.quota;
     let samba_user = &req.samba_user;
-    let mountpoint = format!("/{}/{}", dataset_name, share_name);
+    // let mountpoint = format!("/{}/{}", dataset_name, share_name);
 
-    let dataset = format!("{}/{}", dataset_name, share_name);
+    // let dataset = format!("{}/{}", dataset_name, share_name);
 
     // Step 0: 检查 dataset 是否已存在
     let check_output = Command::new("zfs")
@@ -850,61 +850,46 @@ fn handle_create_zfs_share(req: CreateZfsShareRequest) -> Response {
         Ok(result) => result.status.success(),
         Err(_) => false,
     };
-
-    // Step 1: 如果 dataset 不存在则创建，已存在则设置 sharesmb=on
-    if !dataset_exists {
-        let output = Command::new("zfs")
-            .args([
-                "create",
-                "-o", "sharesmb=on",
-                "-o", "compression=lz4",
-                &dataset,
-            ])
-            .output();
-
-        match output {
-            Ok(result) => {
-                if !result.status.success() {
-                    let stderr = String::from_utf8_lossy(&result.stderr);
-                    return Response {
-                        success: false,
-                        data: None,
-                        error: Some(format!("Failed to create ZFS dataset '{}': {}", dataset, stderr)),
-                    };
-                }
-            }
-            Err(e) => {
+    
+    if !dataset_exists {                                                                                                                                                           │
+        return Response {                                                                                                                                                          │
+            success: false,                                                                                                                                                        │
+            data: None,                                                                                                                                                            │
+           error: Some(format!("Dataset '{}' does not exist", dataset)),                                                                                                          │
+        };                                                                                                                                                                         │
+    }            
+    // 获取 dataset 实际 mountpoint
+    let mp_output = match Command::new("zfs")
+        .args(["get", "-H", "-o", "value", "mountpoint", dataset])
+        .output()
+    {
+        Ok(output) => {
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
                 return Response {
                     success: false,
                     data: None,
-                    error: Some(format!("Failed to execute zfs create '{}': {}", dataset, e)),
+                    error: Some(format!("Failed to get mountpoint for dataset '{}': {}", dataset, stderr)),
                 };
             }
+            output
         }
-    } else {
-        let output = Command::new("zfs")
-            .args(["set", "sharesmb=on", &dataset])
-            .output();
+        Err(e) => {
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to execute zfs get mountpoint for '{}': {}", dataset, e)),
+            };
+        }
+    };
 
-        match output {
-            Ok(result) => {
-                if !result.status.success() {
-                    let stderr = String::from_utf8_lossy(&result.stderr);
-                    return Response {
-                        success: false,
-                        data: None,
-                        error: Some(format!("Failed to set sharesmb=on for dataset '{}': {}", dataset, stderr)),
-                    };
-                }
-            }
-            Err(e) => {
-                return Response {
-                    success: false,
-                    data: None,
-                    error: Some(format!("Failed to execute zfs set sharesmb=on '{}': {}", dataset, e)),
-                };
-            }
-        }
+    let mountpoint = String::from_utf8_lossy(&mp_output.stdout).trim().to_string();
+    if mountpoint == "none" || mountpoint == "-" {
+        return Response {
+            success: false,
+            data: None,
+            error: Some(format!("Dataset '{}' is not mounted", dataset)),
+        };
     }
 
     // Step 2: zfs set quota=<quota> <pool>/<share_name>（quota 为 none 时跳过）
@@ -921,7 +906,6 @@ fn handle_create_zfs_share(req: CreateZfsShareRequest) -> Response {
             Ok(result) => {
                 if !result.status.success() {
                     let stderr = String::from_utf8_lossy(&result.stderr);
-                    let _ = Command::new("zfs").args(["destroy", &dataset]).output();
                     return Response {
                         success: false,
                         data: None,
@@ -930,44 +914,12 @@ fn handle_create_zfs_share(req: CreateZfsShareRequest) -> Response {
                 }
             }
             Err(e) => {
-                let _ = Command::new("zfs").args(["destroy", &dataset]).output();
                 return Response {
                     success: false,
                     data: None,
                     error: Some(format!("Failed to execute zfs set quota '{}': {}", quota, e)),
                 };
             }
-        }
-    }
-
-    // Step 3: zfs set mountpoint=<mountpoint> <pool>/<share_name>
-    let output = Command::new("zfs")
-        .args([
-            "set",
-            &format!("mountpoint={}", &mountpoint),
-            &dataset,
-        ])
-        .output();
-
-    match output {
-        Ok(result) => {
-            if !result.status.success() {
-                let stderr = String::from_utf8_lossy(&result.stderr);
-                let _ = Command::new("zfs").args(["destroy", &dataset]).output();
-                return Response {
-                    success: false,
-                    data: None,
-                    error: Some(format!("Failed to set mountpoint '{}': {}", mountpoint, stderr)),
-                };
-            }
-        }
-        Err(e) => {
-            let _ = Command::new("zfs").args(["destroy", &dataset]).output();
-            return Response {
-                success: false,
-                data: None,
-                error: Some(format!("Failed to execute zfs set mountpoint '{}': {}", mountpoint, e)),
-            };
         }
     }
 
@@ -1006,7 +958,7 @@ fn handle_create_zfs_share(req: CreateZfsShareRequest) -> Response {
         success: true,
         message: format!(
             "ZFS share '{}' created successfully on pool '{}', mounted at '{}' with quota '{}'",
-            share_name, dataset_name, mountpoint, quota
+            share_name, dataset, mountpoint, quota
         ),
         error: None,
     };
