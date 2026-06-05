@@ -833,7 +833,6 @@ fn find_partition_by_id(disk_name: &str, part_suffix: &str) -> Result<String, St
 }
 
 fn handle_create_zfs_share(req: CreateZfsShareRequest) -> Response {
-    let share_name = &req.share_name;
     let dataset = &req.dataset_name;
     let quota = &req.quota;
     let samba_user = &req.samba_user;
@@ -851,12 +850,12 @@ fn handle_create_zfs_share(req: CreateZfsShareRequest) -> Response {
         Err(_) => false,
     };
     
-    if !dataset_exists {                                                                                                                                                           │
-        return Response {                                                                                                                                                          │
-            success: false,                                                                                                                                                        │
-            data: None,                                                                                                                                                            │
-           error: Some(format!("Dataset '{}' does not exist", dataset)),                                                                                                          │
-        };                                                                                                                                                                         │
+    if !dataset_exists {
+        return Response {
+            success: false,
+            data: None,
+            error: Some(format!("Dataset '{}' does not exist", dataset)),
+        };
     }            
     // 获取 dataset 实际 mountpoint
     let mp_output = match Command::new("zfs")
@@ -957,8 +956,8 @@ fn handle_create_zfs_share(req: CreateZfsShareRequest) -> Response {
     let resp_data = CreateZfsShareResponse {
         success: true,
         message: format!(
-            "ZFS share '{}' created successfully on pool '{}', mounted at '{}' with quota '{}'",
-            share_name, dataset, mountpoint, quota
+            "ZFS share '{}' created successfully, mounted at '{}' with quota '{}'",
+            dataset, mountpoint, quota
         ),
         error: None,
     };

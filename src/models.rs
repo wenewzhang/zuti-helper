@@ -81,7 +81,6 @@ pub struct CreateDirectoryResponse {
 // create_zfs_share 请求结构体
 #[derive(Deserialize, Debug)]
 pub struct CreateZfsShareRequest {
-    pub share_name: String,
     pub dataset_name: String,
     pub quota: String,
     pub samba_user: String,

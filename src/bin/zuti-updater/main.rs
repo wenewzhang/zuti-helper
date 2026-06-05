@@ -3,7 +3,9 @@ use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
-use zuti_helper::config::consts::{SAMBA_PASSDB_PATH, SQLITE_MIGRATIONS_DIR, UPGRADE_FILES, UPGRADE_MUST_COPY_FILES, ZUTI_DB_PATH};
+use zuti_helper::config::consts::{
+    SAMBA_PASSDB_PATH, SQLITE_MIGRATIONS_DIR, UPGRADE_FILES, UPGRADE_MUST_COPY_FILES, ZUTI_DB_PATH,
+};
 use zuti_helper::config::logger::init_logger_for;
 
 fn copy_entry(src: &Path, dest: &Path) {
@@ -66,7 +68,11 @@ fn copy_directory(src_dir: &Path, dest_base: &Path) {
         let relative = match src_path.strip_prefix(src_dir) {
             Ok(r) => r,
             Err(e) => {
-                log::error!("Failed to get relative path for '{}': {}", src_path.display(), e);
+                log::error!(
+                    "Failed to get relative path for '{}': {}",
+                    src_path.display(),
+                    e
+                );
                 continue;
             }
         };
@@ -126,308 +132,383 @@ fn main() {
     }
 
     if !is_fresh_install {
-    for src_path in UPGRADE_FILES {
-        let src = Path::new(src_path);
-        if !src.exists() {
-            log::warn!("Source file '{}' does not exist, skipping", src_path);
-            continue;
-        }
+        for src_path in UPGRADE_FILES {
+            let src = Path::new(src_path);
+            if !src.exists() {
+                log::warn!("Source file '{}' does not exist, skipping", src_path);
+                continue;
+            }
 
-        let dest_path = format!("{}{}", target_dir, src_path);
-        let dest = Path::new(&dest_path);
+            let dest_path = format!("{}{}", target_dir, src_path);
+            let dest = Path::new(&dest_path);
 
-        if src.is_dir() {
-            copy_directory(src, dest);
-        } else {
-            copy_entry(src, dest);
+            if src.is_dir() {
+                copy_directory(src, dest);
+            } else {
+                copy_entry(src, dest);
+            }
         }
-    }
     } else {
         log::info!("Skipping files backup (fresh install)");
     }
     // 备份 SAMBA passdb.tdb
     if !is_fresh_install {
-    let passdb_path = Path::new(SAMBA_PASSDB_PATH);
-    if passdb_path.exists() {
-        match Command::new("tdbbackup")
-            .args(["-s", ".bak", SAMBA_PASSDB_PATH])
-            .output()
-        {
-            Ok(output) if output.status.success() => {
-                let bak_src = format!("{}.bak", SAMBA_PASSDB_PATH);
-                let bak_dest = format!("{}{}", target_dir, SAMBA_PASSDB_PATH);
+        let passdb_path = Path::new(SAMBA_PASSDB_PATH);
+        if passdb_path.exists() {
+            match Command::new("tdbbackup")
+                .args(["-s", ".bak", SAMBA_PASSDB_PATH])
+                .output()
+            {
+                Ok(output) if output.status.success() => {
+                    let bak_src = format!("{}.bak", SAMBA_PASSDB_PATH);
+                    let bak_dest = format!("{}{}", target_dir, SAMBA_PASSDB_PATH);
 
-                if let Some(parent) = Path::new(&bak_dest).parent() {
-                    if let Err(e) = fs::create_dir_all(parent) {
-                        log::error!("Failed to create directory '{}': {}", parent.display(), e);
-                    } else {
-                        match fs::copy(&bak_src, &bak_dest) {
-                            Ok(bytes) => {
-                                log::info!(
-                                    "Backed up '{}' -> '{}' ({} bytes)",
-                                    SAMBA_PASSDB_PATH,
-                                    bak_dest,
-                                    bytes
-                                );
-                            }
-                            Err(e) => {
-                                log::error!(
-                                    "Failed to copy backup '{}' -> '{}': {}",
-                                    bak_src,
-                                    bak_dest,
-                                    e
-                                );
+                    if let Some(parent) = Path::new(&bak_dest).parent() {
+                        if let Err(e) = fs::create_dir_all(parent) {
+                            log::error!("Failed to create directory '{}': {}", parent.display(), e);
+                        } else {
+                            match fs::copy(&bak_src, &bak_dest) {
+                                Ok(bytes) => {
+                                    log::info!(
+                                        "Backed up '{}' -> '{}' ({} bytes)",
+                                        SAMBA_PASSDB_PATH,
+                                        bak_dest,
+                                        bytes
+                                    );
+                                }
+                                Err(e) => {
+                                    log::error!(
+                                        "Failed to copy backup '{}' -> '{}': {}",
+                                        bak_src,
+                                        bak_dest,
+                                        e
+                                    );
+                                }
                             }
                         }
                     }
-                }
 
-                // 清理源目录的临时 .bak 文件
-                if let Err(e) = fs::remove_file(&bak_src) {
-                    log::warn!("Failed to remove temporary backup file '{}': {}", bak_src, e);
+                    // 清理源目录的临时 .bak 文件
+                    if let Err(e) = fs::remove_file(&bak_src) {
+                        log::warn!(
+                            "Failed to remove temporary backup file '{}': {}",
+                            bak_src,
+                            e
+                        );
+                    }
+                }
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    log::error!("tdbbackup failed for '{}': {}", SAMBA_PASSDB_PATH, stderr);
+                }
+                Err(e) => {
+                    log::error!(
+                        "Failed to execute tdbbackup for '{}': {}",
+                        SAMBA_PASSDB_PATH,
+                        e
+                    );
+                }
+            }
+        } else {
+            log::warn!(
+                "SAMBA passdb file '{}' does not exist, skipping backup",
+                SAMBA_PASSDB_PATH
+            );
+        }
+
+        // 备份 samba 用户信息
+        match Command::new("pdbedit").arg("-L").output() {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let samba_users: Vec<&str> = stdout
+                    .lines()
+                    .filter_map(|line| line.split(':').next())
+                    .collect();
+
+                if !samba_users.is_empty() {
+                    match fs::read_to_string("/etc/passwd") {
+                        Ok(content) => {
+                            let filtered: Vec<&str> = content
+                                .lines()
+                                .filter(|line| {
+                                    line.split(':')
+                                        .next()
+                                        .is_some_and(|user| samba_users.contains(&user))
+                                })
+                                .collect();
+                            let passwd_dest = format!("{}/etc/passwd", target_dir);
+                            if let Some(parent) = Path::new(&passwd_dest).parent()
+                                && let Err(e) = fs::create_dir_all(parent)
+                            {
+                                log::error!(
+                                    "Failed to create directory '{}': {}",
+                                    parent.display(),
+                                    e
+                                );
+                            }
+                            match fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(&passwd_dest)
+                            {
+                                Ok(mut file) => {
+                                    if let Err(e) = file.write_all(filtered.join("\n").as_bytes()) {
+                                        log::error!("Failed to append to '{}': {}", passwd_dest, e);
+                                    } else {
+                                        log::info!("Backed up Samba users to '{}'", passwd_dest);
+                                    }
+                                }
+                                Err(e) => log::error!("Failed to open '{}': {}", passwd_dest, e),
+                            }
+                        }
+                        Err(e) => log::error!("Failed to read /etc/passwd: {}", e),
+                    }
+
+                    match fs::read_to_string("/etc/shadow") {
+                        Ok(content) => {
+                            let filtered: Vec<&str> = content
+                                .lines()
+                                .filter(|line| {
+                                    line.split(':')
+                                        .next()
+                                        .is_some_and(|user| samba_users.contains(&user))
+                                })
+                                .collect();
+                            let shadow_dest = format!("{}/etc/shadow", target_dir);
+                            if let Some(parent) = Path::new(&shadow_dest).parent()
+                                && let Err(e) = fs::create_dir_all(parent)
+                            {
+                                log::error!(
+                                    "Failed to create directory '{}': {}",
+                                    parent.display(),
+                                    e
+                                );
+                            }
+                            match fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(&shadow_dest)
+                            {
+                                Ok(mut file) => {
+                                    if let Err(e) = file.write_all(filtered.join("\n").as_bytes()) {
+                                        log::error!("Failed to append to '{}': {}", shadow_dest, e);
+                                    } else {
+                                        log::info!(
+                                            "Backed up Samba user shadows to '{}'",
+                                            shadow_dest
+                                        );
+                                    }
+                                }
+                                Err(e) => log::error!("Failed to open '{}': {}", shadow_dest, e),
+                            }
+                        }
+                        Err(e) => log::error!("Failed to read /etc/shadow: {}", e),
+                    }
                 }
             }
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                log::error!("tdbbackup failed for '{}': {}", SAMBA_PASSDB_PATH, stderr);
+                log::error!("pdbedit -L failed: {}", stderr);
             }
             Err(e) => {
-                log::error!("Failed to execute tdbbackup for '{}': {}", SAMBA_PASSDB_PATH, e);
+                log::error!("Failed to execute pdbedit -L: {}", e);
             }
         }
-    } else {
-        log::warn!("SAMBA passdb file '{}' does not exist, skipping backup", SAMBA_PASSDB_PATH);
-    }
-
-    // 备份 samba 用户信息
-    match Command::new("pdbedit").arg("-L").output() {
-        Ok(output) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let samba_users: Vec<&str> = stdout
-                .lines()
-                .filter_map(|line| line.split(':').next())
-                .collect();
-
-            if !samba_users.is_empty() {
-                match fs::read_to_string("/etc/passwd") {
-                    Ok(content) => {
-                        let filtered: Vec<&str> = content
-                            .lines()
-                            .filter(|line| {
-                                line.split(':').next().is_some_and(|user| samba_users.contains(&user))
-                            })
-                            .collect();
-                        let passwd_dest = format!("{}/etc/passwd", target_dir);
-                        if let Some(parent) = Path::new(&passwd_dest).parent()
-                            && let Err(e) = fs::create_dir_all(parent)
-                        {
-                            log::error!("Failed to create directory '{}': {}", parent.display(), e);
-                        }
-                        match fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(&passwd_dest)
-                        {
-                            Ok(mut file) => {
-                                if let Err(e) = file.write_all(filtered.join("\n").as_bytes()) {
-                                    log::error!("Failed to append to '{}': {}", passwd_dest, e);
-                                } else {
-                                    log::info!("Backed up Samba users to '{}'", passwd_dest);
-                                }
-                            }
-                            Err(e) => log::error!("Failed to open '{}': {}", passwd_dest, e),
-                        }
-                    }
-                    Err(e) => log::error!("Failed to read /etc/passwd: {}", e),
-                }
-
-                match fs::read_to_string("/etc/shadow") {
-                    Ok(content) => {
-                        let filtered: Vec<&str> = content
-                            .lines()
-                            .filter(|line| {
-                                line.split(':').next().is_some_and(|user| samba_users.contains(&user))
-                            })
-                            .collect();
-                        let shadow_dest = format!("{}/etc/shadow", target_dir);
-                        if let Some(parent) = Path::new(&shadow_dest).parent()
-                            && let Err(e) = fs::create_dir_all(parent)
-                        {
-                            log::error!("Failed to create directory '{}': {}", parent.display(), e);
-                        }
-                        match fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(&shadow_dest)
-                        {
-                            Ok(mut file) => {
-                                if let Err(e) = file.write_all(filtered.join("\n").as_bytes()) {
-                                    log::error!("Failed to append to '{}': {}", shadow_dest, e);
-                                } else {
-                                    log::info!("Backed up Samba user shadows to '{}'", shadow_dest);
-                                }
-                            }
-                            Err(e) => log::error!("Failed to open '{}': {}", shadow_dest, e),
-                        }
-                    }
-                    Err(e) => log::error!("Failed to read /etc/shadow: {}", e),
-                }
-            }
-        }
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            log::error!("pdbedit -L failed: {}", stderr);
-        }
-        Err(e) => {
-            log::error!("Failed to execute pdbedit -L: {}", e);
-        }
-    }
     } else {
         log::info!("Skipping samba backup (fresh install)");
     }
     // 备份 ZUTI SQLite 数据库
     if !is_fresh_install {
-    let zuti_db_path = Path::new(ZUTI_DB_PATH);
-    if zuti_db_path.exists() {
-        let db_dest = format!("{}{}", target_dir, ZUTI_DB_PATH);
+        let zuti_db_path = Path::new(ZUTI_DB_PATH);
+        if zuti_db_path.exists() {
+            let db_dest = format!("{}{}", target_dir, ZUTI_DB_PATH);
 
-        if let Some(parent) = Path::new(&db_dest).parent() {
-            if let Err(e) = fs::create_dir_all(parent) {
-                log::error!("Failed to create directory '{}': {}", parent.display(), e);
-            } else {
-                match Command::new("sqlite3")
-                    .args([ZUTI_DB_PATH, &format!(".backup {}", db_dest)])
-                    .output()
-                {
-                    Ok(output) if output.status.success() => {
-                        log::info!("Backed up '{}' -> '{}'", ZUTI_DB_PATH, db_dest);
+            if let Some(parent) = Path::new(&db_dest).parent() {
+                if let Err(e) = fs::create_dir_all(parent) {
+                    log::error!("Failed to create directory '{}': {}", parent.display(), e);
+                } else {
+                    match Command::new("sqlite3")
+                        .args([ZUTI_DB_PATH, &format!(".backup {}", db_dest)])
+                        .output()
+                    {
+                        Ok(output) if output.status.success() => {
+                            log::info!("Backed up '{}' -> '{}'", ZUTI_DB_PATH, db_dest);
 
-                        // 查询 users 表中的 name
-                        match Command::new("sqlite3")
-                            .args([ZUTI_DB_PATH, "SELECT name FROM users;"])
-                            .output()
-                        {
-                            Ok(output) if output.status.success() => {
-                                let stdout = String::from_utf8_lossy(&output.stdout);
-                                let names: Vec<&str> = stdout
-                                    .lines()
-                                    .map(|s| s.trim())
-                                    .filter(|s| !s.is_empty())
-                                    .collect();
+                            // 查询 users 表中的 name
+                            match Command::new("sqlite3")
+                                .args([ZUTI_DB_PATH, "SELECT name FROM users;"])
+                                .output()
+                            {
+                                Ok(output) if output.status.success() => {
+                                    let stdout = String::from_utf8_lossy(&output.stdout);
+                                    let names: Vec<&str> = stdout
+                                        .lines()
+                                        .map(|s| s.trim())
+                                        .filter(|s| !s.is_empty())
+                                        .collect();
 
-                                if !names.is_empty() {
-                                    match fs::read_to_string("/etc/passwd") {
-                                        Ok(passwd_content) => {
-                                            let mut entries_to_append = String::new();
-                                            for name in &names {
-                                                for line in passwd_content.lines() {
-                                                    if line.starts_with(&format!("{}:", name)) {
-                                                        entries_to_append.push_str(line);
-                                                        entries_to_append.push('\n');
-                                                        break;
+                                    if !names.is_empty() {
+                                        match fs::read_to_string("/etc/passwd") {
+                                            Ok(passwd_content) => {
+                                                let mut entries_to_append = String::new();
+                                                for name in &names {
+                                                    for line in passwd_content.lines() {
+                                                        if line.starts_with(&format!("{}:", name)) {
+                                                            entries_to_append.push_str(line);
+                                                            entries_to_append.push('\n');
+                                                            break;
+                                                        }
                                                     }
                                                 }
-                                            }
 
-                                            if !entries_to_append.is_empty() {
-                                                let target_passwd = format!("{}/etc/passwd", target_dir);
-                                                if let Some(parent) = Path::new(&target_passwd).parent() {
-                                                    if let Err(e) = fs::create_dir_all(parent) {
-                                                        log::error!("Failed to create directory '{}': {}", parent.display(), e);
-                                                    } else {
-                                                        match fs::OpenOptions::new()
-                                                            .create(true)
-                                                            .append(true)
-                                                            .open(&target_passwd)
-                                                        {
-                                                            Ok(mut file) => {
-                                                                if let Err(e) = file.write_all(entries_to_append.as_bytes()) {
-                                                                    log::error!("Failed to append to '{}': {}", target_passwd, e);
-                                                                } else {
-                                                                    log::info!("Appended user entries to '{}'", target_passwd);
+                                                if !entries_to_append.is_empty() {
+                                                    let target_passwd =
+                                                        format!("{}/etc/passwd", target_dir);
+                                                    if let Some(parent) =
+                                                        Path::new(&target_passwd).parent()
+                                                    {
+                                                        if let Err(e) = fs::create_dir_all(parent) {
+                                                            log::error!(
+                                                                "Failed to create directory '{}': {}",
+                                                                parent.display(),
+                                                                e
+                                                            );
+                                                        } else {
+                                                            match fs::OpenOptions::new()
+                                                                .create(true)
+                                                                .append(true)
+                                                                .open(&target_passwd)
+                                                            {
+                                                                Ok(mut file) => {
+                                                                    if let Err(e) = file.write_all(
+                                                                        entries_to_append
+                                                                            .as_bytes(),
+                                                                    ) {
+                                                                        log::error!(
+                                                                            "Failed to append to '{}': {}",
+                                                                            target_passwd,
+                                                                            e
+                                                                        );
+                                                                    } else {
+                                                                        log::info!(
+                                                                            "Appended user entries to '{}'",
+                                                                            target_passwd
+                                                                        );
+                                                                    }
                                                                 }
-                                                            }
-                                                            Err(e) => {
-                                                                log::error!("Failed to open '{}': {}", target_passwd, e);
+                                                                Err(e) => {
+                                                                    log::error!(
+                                                                        "Failed to open '{}': {}",
+                                                                        target_passwd,
+                                                                        e
+                                                                    );
+                                                                }
                                                             }
                                                         }
                                                     }
                                                 }
                                             }
+                                            Err(e) => {
+                                                log::error!("Failed to read /etc/passwd: {}", e);
+                                            }
                                         }
-                                        Err(e) => {
-                                            log::error!("Failed to read /etc/passwd: {}", e);
-                                        }
-                                    }
 
-                                    // 处理 /etc/shadow
-                                    match fs::read_to_string("/etc/shadow") {
-                                        Ok(shadow_content) => {
-                                            let mut shadow_entries_to_append = String::new();
-                                            for name in &names {
-                                                for line in shadow_content.lines() {
-                                                    if line.starts_with(&format!("{}:", name)) {
-                                                        shadow_entries_to_append.push_str(line);
-                                                        shadow_entries_to_append.push('\n');
-                                                        break;
+                                        // 处理 /etc/shadow
+                                        match fs::read_to_string("/etc/shadow") {
+                                            Ok(shadow_content) => {
+                                                let mut shadow_entries_to_append = String::new();
+                                                for name in &names {
+                                                    for line in shadow_content.lines() {
+                                                        if line.starts_with(&format!("{}:", name)) {
+                                                            shadow_entries_to_append.push_str(line);
+                                                            shadow_entries_to_append.push('\n');
+                                                            break;
+                                                        }
                                                     }
                                                 }
-                                            }
 
-                                            if !shadow_entries_to_append.is_empty() {
-                                                let target_shadow = format!("{}/etc/shadow", target_dir);
-                                                if let Some(parent) = Path::new(&target_shadow).parent() {
-                                                    if let Err(e) = fs::create_dir_all(parent) {
-                                                        log::error!("Failed to create directory '{}': {}", parent.display(), e);
-                                                    } else {
-                                                        match fs::OpenOptions::new()
-                                                            .create(true)
-                                                            .append(true)
-                                                            .open(&target_shadow)
-                                                        {
-                                                            Ok(mut file) => {
-                                                                if let Err(e) = file.write_all(shadow_entries_to_append.as_bytes()) {
-                                                                    log::error!("Failed to append to '{}': {}", target_shadow, e);
-                                                                } else {
-                                                                    log::info!("Appended user entries to '{}'", target_shadow);
+                                                if !shadow_entries_to_append.is_empty() {
+                                                    let target_shadow =
+                                                        format!("{}/etc/shadow", target_dir);
+                                                    if let Some(parent) =
+                                                        Path::new(&target_shadow).parent()
+                                                    {
+                                                        if let Err(e) = fs::create_dir_all(parent) {
+                                                            log::error!(
+                                                                "Failed to create directory '{}': {}",
+                                                                parent.display(),
+                                                                e
+                                                            );
+                                                        } else {
+                                                            match fs::OpenOptions::new()
+                                                                .create(true)
+                                                                .append(true)
+                                                                .open(&target_shadow)
+                                                            {
+                                                                Ok(mut file) => {
+                                                                    if let Err(e) = file.write_all(
+                                                                        shadow_entries_to_append
+                                                                            .as_bytes(),
+                                                                    ) {
+                                                                        log::error!(
+                                                                            "Failed to append to '{}': {}",
+                                                                            target_shadow,
+                                                                            e
+                                                                        );
+                                                                    } else {
+                                                                        log::info!(
+                                                                            "Appended user entries to '{}'",
+                                                                            target_shadow
+                                                                        );
+                                                                    }
                                                                 }
-                                                            }
-                                                            Err(e) => {
-                                                                log::error!("Failed to open '{}': {}", target_shadow, e);
+                                                                Err(e) => {
+                                                                    log::error!(
+                                                                        "Failed to open '{}': {}",
+                                                                        target_shadow,
+                                                                        e
+                                                                    );
+                                                                }
                                                             }
                                                         }
                                                     }
                                                 }
                                             }
-                                        }
-                                        Err(e) => {
-                                            log::error!("Failed to read /etc/shadow: {}", e);
+                                            Err(e) => {
+                                                log::error!("Failed to read /etc/shadow: {}", e);
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            Ok(output) => {
-                                let stderr = String::from_utf8_lossy(&output.stderr);
-                                log::error!("sqlite3 query failed: {}", stderr);
-                            }
-                            Err(e) => {
-                                log::error!("Failed to execute sqlite3 query: {}", e);
+                                Ok(output) => {
+                                    let stderr = String::from_utf8_lossy(&output.stderr);
+                                    log::error!("sqlite3 query failed: {}", stderr);
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to execute sqlite3 query: {}", e);
+                                }
                             }
                         }
-                    }
-                    Ok(output) => {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        log::error!("sqlite3 backup failed for '{}': {}", ZUTI_DB_PATH, stderr);
-                    }
-                    Err(e) => {
-                        log::error!("Failed to execute sqlite3 backup for '{}': {}", ZUTI_DB_PATH, e);
+                        Ok(output) => {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            log::error!("sqlite3 backup failed for '{}': {}", ZUTI_DB_PATH, stderr);
+                        }
+                        Err(e) => {
+                            log::error!(
+                                "Failed to execute sqlite3 backup for '{}': {}",
+                                ZUTI_DB_PATH,
+                                e
+                            );
+                        }
                     }
                 }
             }
+        } else {
+            log::warn!(
+                "ZUTI database file '{}' does not exist, skipping backup",
+                ZUTI_DB_PATH
+            );
         }
-    } else {
-        log::warn!("ZUTI database file '{}' does not exist, skipping backup", ZUTI_DB_PATH);
-    }
     } else {
         log::info!("Skipping ZUTI database backup (fresh install)");
     }
@@ -452,7 +533,11 @@ fn main() {
         if let Some(parent) = Path::new(&db_path).parent()
             && let Err(e) = fs::create_dir_all(parent)
         {
-            log::error!("Failed to create database directory '{}': {}", parent.display(), e);
+            log::error!(
+                "Failed to create database directory '{}': {}",
+                parent.display(),
+                e
+            );
         }
         for dir in &upgrade_dirs {
             let up_sql_path = format!("{}/{}/up.sql", new_migrations_dir, dir);
@@ -462,20 +547,18 @@ fn main() {
             }
             log::info!("Applying SQLite migration: {}", up_sql_path);
             match fs::File::open(&up_sql_path) {
-                Ok(file) => {
-                    match Command::new("sqlite3").arg(&db_path).stdin(file).output() {
-                        Ok(output) if output.status.success() => {
-                            log::info!("Applied migration '{}' successfully", dir);
-                        }
-                        Ok(output) => {
-                            let stderr = String::from_utf8_lossy(&output.stderr);
-                            log::error!("Migration '{}' failed: {}", dir, stderr);
-                        }
-                        Err(e) => {
-                            log::error!("Failed to execute sqlite3 for migration '{}': {}", dir, e);
-                        }
+                Ok(file) => match Command::new("sqlite3").arg(&db_path).stdin(file).output() {
+                    Ok(output) if output.status.success() => {
+                        log::info!("Applied migration '{}' successfully", dir);
                     }
-                }
+                    Ok(output) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        log::error!("Migration '{}' failed: {}", dir, stderr);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to execute sqlite3 for migration '{}': {}", dir, e);
+                    }
+                },
                 Err(e) => {
                     log::error!("Failed to open migration file '{}': {}", up_sql_path, e);
                 }
@@ -485,7 +568,7 @@ fn main() {
 
     // 备份 Podman images
     if !is_fresh_install {
-    match Command::new("sh")
+        match Command::new("sh")
         .arg("-c")
         .arg("podman save -m -o /tmp/all-images.tar $(podman images --format '{{.Repository}}:{{.Tag}}' | grep -v '<none>')")
         .output()
