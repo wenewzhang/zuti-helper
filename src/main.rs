@@ -118,6 +118,7 @@ fn handle_connection(mut stream: UnixStream) {
             Request::Upgrade(req) => handle_upgrade(req),
             Request::UpgradingProgress(req) => handle_upgrading_progress(req),
             Request::ListZfsShares(req) => handle_list_zfs_shares(req),
+            Request::ZfsShareInfo(req) => handle_zfs_share_info(req),
         };
 
         if !send_response(&mut stream, &resp) {
@@ -1281,6 +1282,127 @@ fn handle_list_zfs_shares(_req: ListZfsSharesRequest) -> Response {
         shares: share_list,
         message: "ZFS SMB shares listed successfully".to_string(),
         error: None,
+    };
+    Response {
+        success: true,
+        data: serde_json::to_value(resp_data).ok(),
+        error: None,
+    }
+}
+
+fn handle_zfs_share_info(req: ZfsShareInfoRequest) -> Response {
+    let dataset = &req.dataset;
+
+    if dataset.is_empty() {
+        return Response {
+            success: false,
+            data: None,
+            error: Some("Dataset name is required".to_string()),
+        };
+    }
+
+    let output = match Command::new("zfs")
+        .args(["get", "-H", "-o", "value", "mountpoint", dataset])
+        .output()
+    {
+        Ok(output) => output,
+        Err(e) => {
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to get mountpoint for dataset '{}': {}", dataset, e)),
+            };
+        }
+    };
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Response {
+            success: false,
+            data: None,
+            error: Some(format!("Failed to get mountpoint for dataset '{}': {}", dataset, stderr)),
+        };
+    }
+    let directory = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    let path = std::path::Path::new(&directory);
+    if !path.exists() || !path.is_dir() {
+        return Response {
+            success: false,
+            data: None,
+            error: Some(format!("Directory '{}' does not exist or is not a directory", directory)),
+        };
+    }
+
+    let metadata = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) => {
+            return Response {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to get directory metadata: {}", e)),
+            };
+        }
+    };
+
+    let uid = metadata.uid();
+    let mode = metadata.mode();
+
+    let owner = Command::new("id")
+        .args(["-nu", &uid.to_string()])
+        .output()
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| uid.to_string());
+
+    let readonly = Command::new("zfs")
+        .args(["get", "-H", "-o", "value", "readonly", dataset])
+        .output()
+        .ok()
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string() == "on")
+        .unwrap_or(false);
+
+    let quota = Command::new("zfs")
+        .args(["get", "-H", "-o", "value", "quota", dataset])
+        .output()
+        .ok()
+        .and_then(|out| {
+            if out.status.success() {
+                Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "none".to_string());
+
+    let owner_permission = if readonly {
+        "readonly".to_string()
+    } else if mode & 0o200 != 0 {
+        "write".to_string()
+    } else {
+        "readonly".to_string()
+    };
+
+    let guest_permission = if readonly {
+        "readonly".to_string()
+    } else if mode & 0o002 != 0 {
+        "write".to_string()
+    } else if mode & 0o004 != 0 {
+        "readonly".to_string()
+    } else {
+        "none".to_string()
+    };
+
+    let resp_data = ZfsShareInfoData {
+        owner,
+        permission: owner_permission,
+        guest_permission,
+        quota,
     };
     Response {
         success: true,
