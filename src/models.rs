@@ -123,7 +123,6 @@ pub struct CreateZfsShareResponse {
 // update_zfs_share 请求结构体
 #[derive(Deserialize, Debug)]
 pub struct UpdateZfsShareRequest {
-    #[serde(rename = "update_zfs_share")]
     pub dataset: String,
     pub owner: String,
     pub permission: String,
