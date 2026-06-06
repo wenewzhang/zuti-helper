@@ -954,7 +954,7 @@ fn handle_update_zfs_share(req: UpdateZfsShareRequest) -> Response {
         }
 
         // 修改 mountpoint 的权限
-        let owner_mod = if req.permission == "readonly" { "u-w" } else { "u+w" };
+        let owner_mod = if req.permission == "readonly" { "u-w+r+x" } else { "u+w+r+x" };
         let group_mod = match req.guest_permission.as_str() {
             "readonly" => "g-w+r+x",
             "none"     => "g=",
@@ -1782,6 +1782,7 @@ fn handle_upgrade(req: UpgradeRequest) -> Response {
                 run("enable systemd-resolved", "chroot", &[t, "systemctl", "enable", "systemd-resolved"]);
                 run("enable systemd-networkd", "chroot", &[t, "systemctl", "enable", "systemd-networkd"]);
                 run("disable networking", "chroot", &[t, "systemctl", "disable", "networking"]);
+                run("enable podman", "chroot", &[t, "systemctl", "enable", "podman"]);
                 run("enable podman", "chroot", &[t, "systemctl", "enable", "podman-restart"]);
                 run("enable nginx", "chroot", &[t, "systemctl", "enable", "nginx"]);
 

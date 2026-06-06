@@ -346,6 +346,7 @@ fn main() {
                                         .map(|s| s.trim())
                                         .filter(|s| !s.is_empty())
                                         .collect();
+                                    log::info!("Names from users table: {:?}", names);
 
                                     if !names.is_empty() {
                                         match fs::read_to_string("/etc/passwd") {
