@@ -46,6 +46,66 @@ fn copy_entry(src: &Path, dest: &Path) {
     }
 }
 
+fn append_user_entries(names: &[&str], source_path: &str, target_path: &str) {
+    match fs::read_to_string(source_path) {
+        Ok(content) => {
+            let mut entries_to_append = String::new();
+            for name in names {
+                for line in content.lines() {
+                    if line.starts_with(&format!("{}:", name)) {
+                        entries_to_append.push_str(line);
+                        entries_to_append.push('\n');
+                        break;
+                    }
+                }
+            }
+
+            if !entries_to_append.is_empty() {
+                if let Some(parent) = Path::new(target_path).parent() {
+                    if let Err(e) = fs::create_dir_all(parent) {
+                        log::error!(
+                            "Failed to create directory '{}': {}",
+                            parent.display(),
+                            e
+                        );
+                    } else {
+                        match fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(target_path)
+                        {
+                            Ok(mut file) => {
+                                if let Err(e) = file.write_all(entries_to_append.as_bytes()) {
+                                    log::error!(
+                                        "Failed to append to '{}': {}",
+                                        target_path,
+                                        e
+                                    );
+                                } else {
+                                    log::info!(
+                                        "Appended user entries to '{}'",
+                                        target_path
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                log::error!(
+                                    "Failed to open '{}': {}",
+                                    target_path,
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            log::error!("Failed to read {}: {}", source_path, e);
+        }
+    }
+}
+
 fn copy_directory(src_dir: &Path, dest_base: &Path) {
     let entries = match fs::read_dir(src_dir) {
         Ok(entries) => entries,
@@ -224,86 +284,16 @@ fn main() {
                     .lines()
                     .filter_map(|line| line.split(':').next())
                     .collect();
-
+                log::info!("Names from samba_users: {:?}", samba_users);
                 if !samba_users.is_empty() {
-                    match fs::read_to_string("/etc/passwd") {
-                        Ok(content) => {
-                            let filtered: Vec<&str> = content
-                                .lines()
-                                .filter(|line| {
-                                    line.split(':')
-                                        .next()
-                                        .is_some_and(|user| samba_users.contains(&user))
-                                })
-                                .collect();
-                            let passwd_dest = format!("{}/etc/passwd", target_dir);
-                            if let Some(parent) = Path::new(&passwd_dest).parent()
-                                && let Err(e) = fs::create_dir_all(parent)
-                            {
-                                log::error!(
-                                    "Failed to create directory '{}': {}",
-                                    parent.display(),
-                                    e
-                                );
-                            }
-                            match fs::OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open(&passwd_dest)
-                            {
-                                Ok(mut file) => {
-                                    if let Err(e) = file.write_all(filtered.join("\n").as_bytes()) {
-                                        log::error!("Failed to append to '{}': {}", passwd_dest, e);
-                                    } else {
-                                        log::info!("Backed up Samba users to '{}'", passwd_dest);
-                                    }
-                                }
-                                Err(e) => log::error!("Failed to open '{}': {}", passwd_dest, e),
-                            }
-                        }
-                        Err(e) => log::error!("Failed to read /etc/passwd: {}", e),
-                    }
+                    let passwd_dest = format!("{}/etc/passwd", target_dir);
+                    append_user_entries(&samba_users, "/etc/passwd", &passwd_dest);
 
-                    match fs::read_to_string("/etc/shadow") {
-                        Ok(content) => {
-                            let filtered: Vec<&str> = content
-                                .lines()
-                                .filter(|line| {
-                                    line.split(':')
-                                        .next()
-                                        .is_some_and(|user| samba_users.contains(&user))
-                                })
-                                .collect();
-                            let shadow_dest = format!("{}/etc/shadow", target_dir);
-                            if let Some(parent) = Path::new(&shadow_dest).parent()
-                                && let Err(e) = fs::create_dir_all(parent)
-                            {
-                                log::error!(
-                                    "Failed to create directory '{}': {}",
-                                    parent.display(),
-                                    e
-                                );
-                            }
-                            match fs::OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open(&shadow_dest)
-                            {
-                                Ok(mut file) => {
-                                    if let Err(e) = file.write_all(filtered.join("\n").as_bytes()) {
-                                        log::error!("Failed to append to '{}': {}", shadow_dest, e);
-                                    } else {
-                                        log::info!(
-                                            "Backed up Samba user shadows to '{}'",
-                                            shadow_dest
-                                        );
-                                    }
-                                }
-                                Err(e) => log::error!("Failed to open '{}': {}", shadow_dest, e),
-                            }
-                        }
-                        Err(e) => log::error!("Failed to read /etc/shadow: {}", e),
-                    }
+                    let shadow_dest = format!("{}/etc/shadow", target_dir);
+                    append_user_entries(&samba_users, "/etc/shadow", &shadow_dest);
+
+                    let target_group = format!("{}/etc/group", target_dir);
+                    append_user_entries(&samba_users, "/etc/group", &target_group);                    
                 }
             }
             Ok(output) => {
@@ -349,136 +339,14 @@ fn main() {
                                     log::info!("Names from users table: {:?}", names);
 
                                     if !names.is_empty() {
-                                        match fs::read_to_string("/etc/passwd") {
-                                            Ok(passwd_content) => {
-                                                let mut entries_to_append = String::new();
-                                                for name in &names {
-                                                    for line in passwd_content.lines() {
-                                                        if line.starts_with(&format!("{}:", name)) {
-                                                            entries_to_append.push_str(line);
-                                                            entries_to_append.push('\n');
-                                                            break;
-                                                        }
-                                                    }
-                                                }
+                                        let target_passwd = format!("{}/etc/passwd", target_dir);
+                                        append_user_entries(&names, "/etc/passwd", &target_passwd);
 
-                                                if !entries_to_append.is_empty() {
-                                                    let target_passwd =
-                                                        format!("{}/etc/passwd", target_dir);
-                                                    if let Some(parent) =
-                                                        Path::new(&target_passwd).parent()
-                                                    {
-                                                        if let Err(e) = fs::create_dir_all(parent) {
-                                                            log::error!(
-                                                                "Failed to create directory '{}': {}",
-                                                                parent.display(),
-                                                                e
-                                                            );
-                                                        } else {
-                                                            match fs::OpenOptions::new()
-                                                                .create(true)
-                                                                .append(true)
-                                                                .open(&target_passwd)
-                                                            {
-                                                                Ok(mut file) => {
-                                                                    if let Err(e) = file.write_all(
-                                                                        entries_to_append
-                                                                            .as_bytes(),
-                                                                    ) {
-                                                                        log::error!(
-                                                                            "Failed to append to '{}': {}",
-                                                                            target_passwd,
-                                                                            e
-                                                                        );
-                                                                    } else {
-                                                                        log::info!(
-                                                                            "Appended user entries to '{}'",
-                                                                            target_passwd
-                                                                        );
-                                                                    }
-                                                                }
-                                                                Err(e) => {
-                                                                    log::error!(
-                                                                        "Failed to open '{}': {}",
-                                                                        target_passwd,
-                                                                        e
-                                                                    );
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                log::error!("Failed to read /etc/passwd: {}", e);
-                                            }
-                                        }
+                                        let target_shadow = format!("{}/etc/shadow", target_dir);
+                                        append_user_entries(&names, "/etc/shadow", &target_shadow);
 
-                                        // 处理 /etc/shadow
-                                        match fs::read_to_string("/etc/shadow") {
-                                            Ok(shadow_content) => {
-                                                let mut shadow_entries_to_append = String::new();
-                                                for name in &names {
-                                                    for line in shadow_content.lines() {
-                                                        if line.starts_with(&format!("{}:", name)) {
-                                                            shadow_entries_to_append.push_str(line);
-                                                            shadow_entries_to_append.push('\n');
-                                                            break;
-                                                        }
-                                                    }
-                                                }
-
-                                                if !shadow_entries_to_append.is_empty() {
-                                                    let target_shadow =
-                                                        format!("{}/etc/shadow", target_dir);
-                                                    if let Some(parent) =
-                                                        Path::new(&target_shadow).parent()
-                                                    {
-                                                        if let Err(e) = fs::create_dir_all(parent) {
-                                                            log::error!(
-                                                                "Failed to create directory '{}': {}",
-                                                                parent.display(),
-                                                                e
-                                                            );
-                                                        } else {
-                                                            match fs::OpenOptions::new()
-                                                                .create(true)
-                                                                .append(true)
-                                                                .open(&target_shadow)
-                                                            {
-                                                                Ok(mut file) => {
-                                                                    if let Err(e) = file.write_all(
-                                                                        shadow_entries_to_append
-                                                                            .as_bytes(),
-                                                                    ) {
-                                                                        log::error!(
-                                                                            "Failed to append to '{}': {}",
-                                                                            target_shadow,
-                                                                            e
-                                                                        );
-                                                                    } else {
-                                                                        log::info!(
-                                                                            "Appended user entries to '{}'",
-                                                                            target_shadow
-                                                                        );
-                                                                    }
-                                                                }
-                                                                Err(e) => {
-                                                                    log::error!(
-                                                                        "Failed to open '{}': {}",
-                                                                        target_shadow,
-                                                                        e
-                                                                    );
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                log::error!("Failed to read /etc/shadow: {}", e);
-                                            }
-                                        }
+                                        let target_group = format!("{}/etc/group", target_dir);
+                                        append_user_entries(&names, "/etc/group", &target_group);
                                     }
                                 }
                                 Ok(output) => {
