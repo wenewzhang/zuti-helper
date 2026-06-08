@@ -481,8 +481,8 @@ fn handle_create_directory(req: CreateDirectoryRequest) -> Response {
         };
     }
 
-    // 1. 创建目录
-    match Command::new("mkdir").arg("-p").arg(directory).output() {
+    // 1. 创建 ZFS dataset
+    match Command::new("zfs").arg("create").arg(directory).output() {
         Ok(output) => {
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -497,7 +497,7 @@ fn handle_create_directory(req: CreateDirectoryRequest) -> Response {
             return Response {
                 success: false,
                 data: None,
-                error: Some(format!("Failed to execute mkdir for '{}': {}", directory, e)),
+                error: Some(format!("Failed to execute zfs create for '{}': {}", directory, e)),
             };
         }
     }
