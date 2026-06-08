@@ -112,7 +112,7 @@ fn handle_connection(mut stream: UnixStream) {
             Request::ExportPool(req) => handle_export_pool(req),
             Request::ImportPool(req) => handle_import_pool(req),
             Request::ImportPoolPlus(req) => handle_import_pool_plus(req),
-            Request::CreateDirectory(req) => handle_create_directory(req),
+            Request::CreateDatasetDirectory(req) => handle_create_dataset_and_directory(req),
             Request::CreateZfsShare(req) => handle_create_zfs_share(req),
             Request::UpdateZfsShare(req) => handle_update_zfs_share(req),
             Request::Upgrade(req) => handle_upgrade(req),
@@ -466,7 +466,7 @@ fn handle_export_pool(req: ExportPoolRequest) -> Response {
     }
 }
 
-fn handle_create_directory(req: CreateDirectoryRequest) -> Response {
+fn handle_create_dataset_and_directory(req: CreateDatasetDirectoryRequest) -> Response {
     let directory = &req.directory;
     let owner = &req.owner;
     let arg = &req.arg;
@@ -576,7 +576,7 @@ fn handle_create_directory(req: CreateDirectoryRequest) -> Response {
         }
     }
 
-    let resp_data = CreateDirectoryResponse {
+    let resp_data = CreateDatasetDirectoryResponse {
         success: true,
         message: format!(
             "Directory '{}' created with owner '{}' and permissions '{}'",

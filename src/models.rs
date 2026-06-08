@@ -62,17 +62,17 @@ pub struct ImportPoolPlusResponse {
     pub error: Option<String>,
 }
 
-// create_directory 请求结构体
+// create_dataset_and_directory 请求结构体
 #[derive(Deserialize, Debug)]
-pub struct CreateDirectoryRequest {
+pub struct CreateDatasetDirectoryRequest {
     pub directory: String,
     pub owner: String,
     pub arg: String, // 权限模式，如 "755"
 }
 
-// create_directory 响应结构体
+// create_dataset_and_directory 响应结构体
 #[derive(Serialize, Debug)]
-pub struct CreateDirectoryResponse {
+pub struct CreateDatasetDirectoryResponse {
     pub success: bool,
     pub message: String,
     pub error: Option<String>,
@@ -187,8 +187,8 @@ pub enum Request {
     ImportPool(ImportPoolRequest),
     #[serde(rename = "import_pool_plus")]
     ImportPoolPlus(ImportPoolPlusRequest),
-    #[serde(rename = "create_directory")]
-    CreateDirectory(CreateDirectoryRequest),
+    #[serde(rename = "create_dataset_and_directory")]
+    CreateDatasetDirectory(CreateDatasetDirectoryRequest),
     #[serde(rename = "create_zfs_share")]
     CreateZfsShare(CreateZfsShareRequest),
     #[serde(rename = "update_zfs_share")]
