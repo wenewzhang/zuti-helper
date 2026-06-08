@@ -481,15 +481,18 @@ fn handle_create_directory(req: CreateDirectoryRequest) -> Response {
         };
     }
 
+    // 去除前后 '/'，将 /store/abcde/ 转换为 store/abcde 作为 ZFS dataset 名称
+    let dataset = directory.trim_matches('/');
+
     // 1. 创建 ZFS dataset
-    match Command::new("zfs").arg("create").arg(directory).output() {
+    match Command::new("zfs").arg("create").arg(dataset).output() {
         Ok(output) => {
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 return Response {
                     success: false,
                     data: None,
-                    error: Some(format!("Failed to create directory '{}': {}", directory, stderr)),
+                    error: Some(format!("Failed to create directory '{}': {}", dataset, stderr)),
                 };
             }
         }
@@ -497,7 +500,7 @@ fn handle_create_directory(req: CreateDirectoryRequest) -> Response {
             return Response {
                 success: false,
                 data: None,
-                error: Some(format!("Failed to execute zfs create for '{}': {}", directory, e)),
+                error: Some(format!("Failed to execute zfs create for '{}': {}", dataset, e)),
             };
         }
     }
