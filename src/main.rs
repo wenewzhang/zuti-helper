@@ -484,28 +484,41 @@ fn handle_create_directory(req: CreateDirectoryRequest) -> Response {
     // 去除前后 '/'，将 /store/abcde/ 转换为 store/abcde 作为 ZFS dataset 名称
     let dataset = directory.trim_matches('/');
 
-    // 1. 创建 ZFS dataset
-    match Command::new("zfs").arg("create").arg(dataset).output() {
-        Ok(output) => {
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
+    // 1. 检查 dataset 是否已存在
+    let dataset_exists = match Command::new("zfs")
+        .args(["list", "-H", "-o", "name", dataset])
+        .output()
+    {
+        Ok(result) => result.status.success(),
+        Err(_) => false,
+    };
+
+    // 2. 若不存在则创建 ZFS dataset
+    if !dataset_exists {
+        match Command::new("zfs").arg("create").arg(dataset).output() {
+            Ok(output) => {
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    return Response {
+                        success: false,
+                        data: None,
+                        error: Some(format!("Failed to create directory '{}': {}", dataset, stderr)),
+                    };
+                }
+            }
+            Err(e) => {
                 return Response {
                     success: false,
                     data: None,
-                    error: Some(format!("Failed to create directory '{}': {}", dataset, stderr)),
+                    error: Some(format!("Failed to execute zfs create for '{}': {}", dataset, e)),
                 };
             }
         }
-        Err(e) => {
-            return Response {
-                success: false,
-                data: None,
-                error: Some(format!("Failed to execute zfs create for '{}': {}", dataset, e)),
-            };
-        }
+    } else {
+        log::info!("Dataset '{}' already exists, skipping zfs create", dataset);
     }
 
-    // 2. 设置拥有者
+    // 3. 设置拥有者
     if !owner.is_empty() {
         match Command::new("chown").arg(owner).arg(directory).output() {
             Ok(output) => {
@@ -534,7 +547,7 @@ fn handle_create_directory(req: CreateDirectoryRequest) -> Response {
         }
     }
 
-    // 3. 设置权限
+    // 4. 设置权限
     if !arg.is_empty() {
         match Command::new("chmod").arg(arg).arg(directory).output() {
             Ok(output) => {
