@@ -939,35 +939,65 @@ fn handle_update_zfs_share(req: UpdateZfsShareRequest) -> Response {
         }
 
         // 修改 mountpoint 的 owner
-        let output = match Command::new("chown")
-            .args(["-R", &format!("{}:{}", req.owner, req.owner), directory])
-            .output()
-        {
-            Ok(output) => output,
-            Err(e) => {
-                log::error!("Failed to chown for directory '{}': {}", directory, e);
+        let uid_str = match Command::new("id").args(["-u", &req.owner]).output() {
+            Ok(output) if output.status.success() => {
+                String::from_utf8_lossy(&output.stdout).trim().to_string()
+            }
+            _ => {
+                log::error!("Failed to resolve uid for owner '{}'", req.owner);
                 return Response {
                     success: false,
                     data: None,
-                    error: Some(format!(
-                        "Failed to chown for directory '{}': {}",
-                        directory, e
-                    )),
+                    error: Some(format!("Failed to resolve uid for owner '{}'", req.owner)),
                 };
             }
         };
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            log::error!("Failed to chown for directory '{}': {}", directory, stderr);
-            return Response {
-                success: false,
-                data: None,
-                error: Some(format!(
-                    "Failed to chown for directory '{}': {}",
-                    directory, stderr
-                )),
-            };
-        }
+        let gid_str = match Command::new("id").args(["-g", &req.owner]).output() {
+            Ok(output) if output.status.success() => {
+                String::from_utf8_lossy(&output.stdout).trim().to_string()
+            }
+            _ => {
+                log::error!("Failed to resolve gid for owner '{}'", req.owner);
+                return Response {
+                    success: false,
+                    data: None,
+                    error: Some(format!("Failed to resolve gid for owner '{}'", req.owner)),
+                };
+            }
+        };
+        let target_uid: u32 = match uid_str.parse() {
+            Ok(v) => v,
+            Err(e) => {
+                log::error!("Invalid uid '{}': {}", uid_str, e);
+                return Response {
+                    success: false,
+                    data: None,
+                    error: Some(format!("Invalid uid '{}': {}", uid_str, e)),
+                };
+            }
+        };
+        let target_gid: u32 = match gid_str.parse() {
+            Ok(v) => v,
+            Err(e) => {
+                log::error!("Invalid gid '{}': {}", gid_str, e);
+                return Response {
+                    success: false,
+                    data: None,
+                    error: Some(format!("Invalid gid '{}': {}", gid_str, e)),
+                };
+            }
+        };
+        log::info!(
+            "Starting chown_recursive for directory: {} uid: {} gid: {}",
+            directory, target_uid, target_gid
+        );
+        let chown_start = std::time::Instant::now();
+        chown_recursive(std::path::Path::new(directory), target_uid, target_gid);
+        log::info!(
+            "chown_recursive for directory: {} completed in {:?}",
+            directory,
+            chown_start.elapsed()
+        );
 
         // 修改 mountpoint 的权限
         let owner_mod = if req.permission == "readonly" { "u-w+r+x" } else { "u+w+r+x" };
@@ -1028,6 +1058,50 @@ fn handle_update_zfs_share(req: UpdateZfsShareRequest) -> Response {
         data: serde_json::to_value(resp_data).ok(),
         error: None,
     }
+}
+
+fn chown_recursive(path: &std::path::Path, target_uid: u32, target_gid: u32) {
+    let start = std::time::Instant::now();
+    let mut stack = vec![path.to_path_buf()];
+    let mut processed: u64 = 0;
+    let mut changed: u64 = 0;
+    while let Some(current) = stack.pop() {
+        match current.symlink_metadata() {
+            Ok(meta) => {
+                processed += 1;
+                if meta.uid() != target_uid || meta.gid() != target_gid {
+                    if let Err(e) =
+                        std::os::unix::fs::chown(&current, Some(target_uid), Some(target_gid))
+                    {
+                        log::warn!("Failed to chown '{}': {}", current.display(), e);
+                    } else {
+                        changed += 1;
+                    }
+                }
+                if meta.is_dir() {
+                    match std::fs::read_dir(&current) {
+                        Ok(entries) => {
+                            for entry in entries.flatten() {
+                                stack.push(entry.path());
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to read dir '{}': {}", current.display(), e);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to read metadata '{}': {}", current.display(), e);
+            }
+        }
+    }
+    log::info!(
+        "chown_recursive finished in {:?}: processed {} entries, changed {} entries",
+        start.elapsed(),
+        processed,
+        changed
+    );
 }
 
 fn handle_create_zfs_share(req: CreateZfsShareRequest) -> Response {
@@ -1179,38 +1253,6 @@ fn handle_create_zfs_share(req: CreateZfsShareRequest) -> Response {
                 return;
             }
         };
-
-        fn chown_recursive(path: &std::path::Path, target_uid: u32, target_gid: u32) {
-            let mut stack = vec![path.to_path_buf()];
-            while let Some(current) = stack.pop() {
-                match current.symlink_metadata() {
-                    Ok(meta) => {
-                        if meta.uid() != target_uid {
-                            if let Err(e) =
-                                std::os::unix::fs::chown(&current, Some(target_uid), Some(target_gid))
-                            {
-                                log::warn!("Failed to chown '{}': {}", current.display(), e);
-                            }
-                        }
-                        if meta.is_dir() {
-                            match std::fs::read_dir(&current) {
-                                Ok(entries) => {
-                                    for entry in entries.flatten() {
-                                        stack.push(entry.path());
-                                    }
-                                }
-                                Err(e) => {
-                                    log::warn!("Failed to read dir '{}': {}", current.display(), e);
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to read metadata '{}': {}", current.display(), e);
-                    }
-                }
-            }
-        }
 
         let start = std::time::Instant::now();
         chown_recursive(std::path::Path::new(&mountpoint_clone), target_uid, target_gid);
