@@ -1000,49 +1000,33 @@ fn handle_update_zfs_share(req: UpdateZfsShareRequest) -> Response {
         );
 
         // 修改 mountpoint 的权限
-        let owner_mod = if req.permission == "readonly" { "u-w+r+x" } else { "u+w+r+x" };
-        let group_mod = match req.guest_permission.as_str() {
-            "readonly" => "g-w+r+x",
-            "none"     => "g=",
-            _          => "g+w+r+x",
+        let user_mode: u32 = if req.permission == "readonly" { 0o5 } else { 0o7 };
+        let group_mode: u32 = match req.guest_permission.as_str() {
+            "readonly" => 0o5,
+            "none"     => 0o0,
+            _          => 0o7,
         };
-        let guest_mod = match req.guest_permission.as_str() {
-            "readonly" => "o-w+r+x",
-            "none"     => "o=",
-            _          => "o+w+r+x",
+        let other_mode: u32 = match req.guest_permission.as_str() {
+            "readonly" => 0o5,
+            "none"     => 0o0,
+            _          => 0o7,
         };
-        let chmod_arg = format!("{},{},{}", owner_mod, group_mod, guest_mod);
-        log::info!("chmod_arg: {} directory: {}", chmod_arg, directory);
-
-        let output = match Command::new("chmod")
-            .args(["-R", &chmod_arg, directory])
-            .output()
-        {
-            Ok(output) => output,
-            Err(e) => {
-                log::error!("Failed to chmod for directory '{}': {}", directory, e);
-                return Response {
-                    success: false,
-                    data: None,
-                    error: Some(format!(
-                        "Failed to chmod for directory '{}': {}",
-                        directory, e
-                    )),
-                };
-            }
-        };
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            log::error!("Failed to chmod for directory '{}': {}", directory, stderr);
-            return Response {
-                success: false,
-                data: None,
-                error: Some(format!(
-                    "Failed to chmod for directory '{}': {}",
-                    directory, stderr
-                )),
-            };
-        }
+        let target_mode = (user_mode << 6) | (group_mode << 3) | other_mode;
+        let directory_clone = directory.to_string();
+        log::info!(
+            "Starting background chmod_recursive for directory: {} target_mode: {:o}",
+            directory_clone,
+            target_mode
+        );
+        std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            chmod_recursive(std::path::Path::new(&directory_clone), target_mode);
+            log::info!(
+                "Background chmod_recursive for directory: {} completed in {:?}",
+                directory_clone,
+                start.elapsed()
+            );
+        });
     }
 
     let resp_data = UpdateZfsShareResponse {
@@ -1098,6 +1082,55 @@ fn chown_recursive(path: &std::path::Path, target_uid: u32, target_gid: u32) {
     }
     log::info!(
         "chown_recursive finished in {:?}: processed {} entries, changed {} entries",
+        start.elapsed(),
+        processed,
+        changed
+    );
+}
+
+fn chmod_recursive(path: &std::path::Path, target_mode: u32) {
+    let start = std::time::Instant::now();
+    let mut stack = vec![path.to_path_buf()];
+    let mut processed: u64 = 0;
+    let mut changed: u64 = 0;
+    while let Some(current) = stack.pop() {
+        match current.symlink_metadata() {
+            Ok(meta) => {
+                processed += 1;
+                let current_mode = meta.mode() & 0o777;
+                if current_mode != target_mode {
+                    match std::fs::set_permissions(
+                        &current,
+                        std::fs::Permissions::from_mode(target_mode),
+                    ) {
+                        Ok(_) => {
+                            changed += 1;
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to chmod '{}': {}", current.display(), e);
+                        }
+                    }
+                }
+                if meta.is_dir() {
+                    match std::fs::read_dir(&current) {
+                        Ok(entries) => {
+                            for entry in entries.flatten() {
+                                stack.push(entry.path());
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to read dir '{}': {}", current.display(), e);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to read metadata '{}': {}", current.display(), e);
+            }
+        }
+    }
+    log::info!(
+        "chmod_recursive finished in {:?}: processed {} entries, changed {} entries",
         start.elapsed(),
         processed,
         changed
