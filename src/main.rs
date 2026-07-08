@@ -1143,33 +1143,85 @@ fn handle_create_zfs_share(req: CreateZfsShareRequest) -> Response {
         }
     }
 
-    // Step 4: chown -R <samba_user>:<samba_user> <mountpoint>
-    let output = Command::new("chown")
-        .args([
-            &format!("{}:{}", samba_user, samba_user),
-            &mountpoint,
-        ])
-        .output();
+    // Step 4: chown -R <samba_user>:<samba_user> <mountpoint> in background
+    let mountpoint_clone = mountpoint.clone();
+    let samba_user_clone = samba_user.clone();
+    std::thread::spawn(move || {
+        let uid_str = match Command::new("id").args(["-u", &samba_user_clone]).output() {
+            Ok(output) if output.status.success() => {
+                String::from_utf8_lossy(&output.stdout).trim().to_string()
+            }
+            _ => {
+                log::error!("Failed to resolve uid for samba_user '{}'", samba_user_clone);
+                return;
+            }
+        };
+        let gid_str = match Command::new("id").args(["-g", &samba_user_clone]).output() {
+            Ok(output) if output.status.success() => {
+                String::from_utf8_lossy(&output.stdout).trim().to_string()
+            }
+            _ => {
+                log::error!("Failed to resolve gid for samba_user '{}'", samba_user_clone);
+                return;
+            }
+        };
+        let target_uid: u32 = match uid_str.parse() {
+            Ok(v) => v,
+            Err(e) => {
+                log::error!("Invalid uid '{}': {}", uid_str, e);
+                return;
+            }
+        };
+        let target_gid: u32 = match gid_str.parse() {
+            Ok(v) => v,
+            Err(e) => {
+                log::error!("Invalid gid '{}': {}", gid_str, e);
+                return;
+            }
+        };
 
-    match output {
-        Ok(result) => {
-            if !result.status.success() {
-                let stderr = String::from_utf8_lossy(&result.stderr);
-                return Response {
-                    success: false,
-                    data: None,
-                    error: Some(format!("Failed to set ownership for user '{}': {}", samba_user, stderr)),
-                };
+        fn chown_recursive(path: &std::path::Path, target_uid: u32, target_gid: u32) {
+            let mut stack = vec![path.to_path_buf()];
+            while let Some(current) = stack.pop() {
+                match current.symlink_metadata() {
+                    Ok(meta) => {
+                        if meta.uid() != target_uid {
+                            if let Err(e) =
+                                std::os::unix::fs::chown(&current, Some(target_uid), Some(target_gid))
+                            {
+                                log::warn!("Failed to chown '{}': {}", current.display(), e);
+                            }
+                        }
+                        if meta.is_dir() {
+                            match std::fs::read_dir(&current) {
+                                Ok(entries) => {
+                                    for entry in entries.flatten() {
+                                        stack.push(entry.path());
+                                    }
+                                }
+                                Err(e) => {
+                                    log::warn!("Failed to read dir '{}': {}", current.display(), e);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to read metadata '{}': {}", current.display(), e);
+                    }
+                }
             }
         }
-        Err(e) => {
-            return Response {
-                success: false,
-                data: None,
-                error: Some(format!("Failed to execute chown for user '{}': {}", samba_user, e)),
-            };
-        }
-    }
+
+        let start = std::time::Instant::now();
+        chown_recursive(std::path::Path::new(&mountpoint_clone), target_uid, target_gid);
+        let elapsed = start.elapsed();
+        log::info!(
+            "Background chown for '{}' under '{}' completed in {:?}",
+            samba_user_clone,
+            mountpoint_clone,
+            elapsed
+        );
+    });
 
     let resp_data = CreateZfsShareResponse {
         success: true,
