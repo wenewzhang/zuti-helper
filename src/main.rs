@@ -1146,7 +1146,6 @@ fn handle_create_zfs_share(req: CreateZfsShareRequest) -> Response {
     // Step 4: chown -R <samba_user>:<samba_user> <mountpoint>
     let output = Command::new("chown")
         .args([
-            "-R",
             &format!("{}:{}", samba_user, samba_user),
             &mountpoint,
         ])
@@ -1156,7 +1155,6 @@ fn handle_create_zfs_share(req: CreateZfsShareRequest) -> Response {
         Ok(result) => {
             if !result.status.success() {
                 let stderr = String::from_utf8_lossy(&result.stderr);
-                let _ = Command::new("zfs").args(["destroy", &dataset]).output();
                 return Response {
                     success: false,
                     data: None,
@@ -1165,7 +1163,6 @@ fn handle_create_zfs_share(req: CreateZfsShareRequest) -> Response {
             }
         }
         Err(e) => {
-            let _ = Command::new("zfs").args(["destroy", &dataset]).output();
             return Response {
                 success: false,
                 data: None,
